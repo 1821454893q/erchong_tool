@@ -17,6 +17,8 @@ from qfluentwidgets import (
 )
 from qfluentwidgets import FluentIcon as FIF
 
+from pages.home import HomeWidget
+
 
 class Widget(QFrame):
 
@@ -36,15 +38,14 @@ class Window(MSFluentWindow):
     def __init__(self):
         super().__init__()
 
-        # create sub interface
-        self.homeInterface = Widget("Home Interface", self)
-        self.ThemeInterface = Widget("Theme Interface", self)
-        self.SettingInterface = Widget("Setting Interface", self)
-
         self.initNavigation()
         self.initWindow()
 
     def initNavigation(self):
+        # create sub interface
+        self.homeInterface = HomeWidget("Home Interface", self)
+        self.SettingInterface = Widget("Setting Interface", self)
+
         self.addSubInterface(self.homeInterface, FIF.HOME, "主页", FIF.HOME_FILL)
 
         self.navigationInterface.addItem(
@@ -88,7 +89,7 @@ if __name__ == "__main__":
     QApplication.setAttribute(Qt.AA_EnableHighDpiScaling)
     QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps)
 
-    setTheme(Theme.DARK)
+    # setTheme(Theme.DARK)
 
     app = QApplication(sys.argv)
     w = Window()
