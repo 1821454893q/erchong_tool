@@ -18,6 +18,7 @@ from qfluentwidgets import (
 from qfluentwidgets import FluentIcon as FIF
 
 from pages.home import HomeWidget
+from pages.gallery_card import GalleryCard
 
 
 class Widget(QFrame):
