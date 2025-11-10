@@ -1,0 +1,27 @@
+{
+    "include": [
+        "."
+    ],
+    "exclude": [
+        "**/__pycache__",
+        "**/node_modules",
+        ".venv"
+    ],
+    "pythonVersion": "3.13",
+    "pythonPlatform": "Windows",
+    "typeCheckingMode": "basic",
+    "reportMissingImports": true,
+    "reportMissingTypeStubs": false,
+    "stubPath": "",
+    "executionEnvironments": [
+        {
+            "root": ".",
+            "pythonVersion": "3.13",
+            "pythonPlatform": "Windows",
+            "extraPaths": [
+                "E:\\p\\Lib\\site-packages",
+                "E:\\inner_py\\ocr_utils"
+            ]
+        }
+    ]
+}

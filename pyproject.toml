@@ -1,0 +1,21 @@
+[project]
+name = "erchong"
+version = "0.0.1"
+description = "二重螺旋脚本工具 - 解放双手"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "PyQt5==5.15.11",
+    "pyqt5_sip==12.17.1",
+    "pyqt-fluent-widgets==1.9.2",
+]
+
+[project.scripts]
+erchong = "src.erchong.app:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+resolution = "highest"
