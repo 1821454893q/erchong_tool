@@ -17,6 +17,9 @@ LOG_CONFIG_FILE = PROJECT_ROOT / "logging_config.json"
 # 项目配置文件
 PYPROJECT_FILE = PROJECT_ROOT / "pyproject.toml"
 
+# QAA 文件目录
+QT_QSS_DIR = RESOURCE_DIR / "qss"
+
 # 窗口配置
 WINDOW_WIDTH = 800
 WINDOW_HEIGHT = 600

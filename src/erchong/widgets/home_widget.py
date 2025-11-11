@@ -1,11 +1,12 @@
 """主页组件"""
+
 import os
 import time
 from typing import TYPE_CHECKING
 
 import win32gui
-from PyQt5.QtCore import Qt, QEasingCurve
-from PyQt5.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
+from PyQt5.QtCore import Qt, QEasingCurve, QSize
+from PyQt5.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget, QDialog, QLabel
 
 import gas.util.img_util as img_util
 import gas.util.screenshot_util as screenshot_util
@@ -25,9 +26,12 @@ from qfluentwidgets import (
     isDarkTheme,
 )
 
+import qframelesswindow as qfw
+import qfluentwidgets as qf
 from ..config.settings import RESOURCE_DIR
 from ..utils.platform import is_win11
 from .image_card_widget import ImageCardWidget
+from .hwnd_list_widget import HwndListWidget
 
 if TYPE_CHECKING:
     from qframelesswindow import AcrylicWindow, FramelessWindow
@@ -60,6 +64,7 @@ class HomeWidget(QWidget):
         hintIcon = IconWidget(InfoBarIcon.INFORMATION)
         hintLabel = BodyLabel("点击编译按钮以开始打包 👉")
         compileButton = PrimaryPushButton(FluentIcon.PLAY_SOLID, "编译")
+        compileButton.clicked.connect(self.openHwnd)
         openButton = PushButton(FluentIcon.VIEW, "打开")
         openButton.clicked.connect(self.open)
         bottomLayout = QHBoxLayout()
@@ -102,6 +107,9 @@ class HomeWidget(QWidget):
 
     def open(self):
         """打开图片卡片窗口"""
-        image_card = ImageCardWidget(self)
-        image_card.show()
+        widget = ImageCardWidget(self)
+        widget.show()
 
+    def openHwnd(self):
+        widget = HwndListWidget()
+        widget.show()

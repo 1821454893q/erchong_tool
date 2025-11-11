@@ -1,4 +1,5 @@
 """设置页面组件"""
+
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QFrame, QHBoxLayout
 
@@ -17,4 +18,3 @@ class SettingsWidget(QFrame):
         self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.hBoxLayout.addWidget(self.label, 1, Qt.AlignmentFlag.AlignCenter)
         self.setObjectName(text.replace(" ", "-"))
-

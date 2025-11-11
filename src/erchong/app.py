@@ -1,4 +1,5 @@
 """应用入口"""
+
 import sys
 
 from PyQt5.QtCore import Qt
@@ -22,7 +23,7 @@ def create_app() -> QApplication:
     app = QApplication(sys.argv)
 
     # 设置主题
-    setTheme(Theme.DARK)
+    setTheme(Theme.LIGHT)
 
     return app
 
@@ -37,4 +38,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

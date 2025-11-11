@@ -3,6 +3,7 @@
 import os
 import time
 from typing import TYPE_CHECKING
+from src.erchong.common.config import cfg
 
 import win32gui
 from PyQt5.QtCore import Qt, QEasingCurve
@@ -15,10 +16,11 @@ from qfluentwidgets import (
     MSFluentTitleBar,
     PrimaryPushButton,
     SmoothScrollArea,
+    ScrollArea,
     isDarkTheme,
 )
 
-from ..config.settings import RESOURCE_DIR
+from ..config.settings import QT_QSS_DIR, RESOURCE_DIR
 from ..utils.platform import is_win11
 
 if TYPE_CHECKING:
@@ -52,10 +54,8 @@ class ImageCardWidget(MicaWindow):
     def __init__(self, parent=None):
         super().__init__()
 
-        log.debug(str(RESOURCE_DIR / "shoko1.jpg"))
-        self.imageLabel = ImageLabel(str(RESOURCE_DIR / "shoko1.jpg"))
-        log.debug(f" image label ===>  {str(RESOURCE_DIR / "shoko2.jpg")}")
-        self.gifLabel = ImageLabel(str(RESOURCE_DIR / "shoko2.jpg"))
+        self.imageLabel = ImageLabel(str(RESOURCE_DIR / "shoko1.jpg"),self)
+        self.gifLabel = ImageLabel(str(RESOURCE_DIR / "shoko2.jpg"),self)
         self.vBoxLayout = QVBoxLayout(self)
         self.setWindowTitle("image")
 
@@ -68,22 +68,21 @@ class ImageCardWidget(MicaWindow):
         self.viewLayout.addWidget(self.imageLabel)
         self.viewLayout.addWidget(self.gifLabel)
 
-        scrollArea = SmoothScrollArea(self)
-        scrollArea.setWidget(view)
-        scrollArea.setScrollAnimation(
-            Qt.Orientation.Vertical, 400, QEasingCurve.OutQuint
-        )
-        scrollArea.setScrollAnimation(
-            Qt.Orientation.Horizontal, 400, QEasingCurve.OutQuint
-        )
-
-        scrollArea.resize(1200, 800)
+        self.scrollArea = ScrollArea(self)
+        self.scrollArea.setWidget(view)
+        self.scrollArea.resize(1200, 800)
 
         btn = PrimaryPushButton("截图")
         btn.clicked.connect(self.capture)
 
-        self.vBoxLayout.addWidget(scrollArea)
+        self.vBoxLayout.addWidget(self.scrollArea)
         self.vBoxLayout.addWidget(btn)
+        # 设置样式
+        cfg.themeChanged.connect(self.setQss)
+
+    def setQss(self):
+        self.setStyleSheet(cfg.getQssFile("image_card_widget"))
+        
 
     def capture(self):
         """截图功能"""
