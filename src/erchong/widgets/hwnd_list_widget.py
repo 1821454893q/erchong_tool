@@ -24,16 +24,7 @@ from ..utils.logger import get_logger
 log = get_logger()
 
 
-class MicaWindow(qfr.FramelessWindow):
-    """Mica 效果窗口基类"""
-
-    def __init__(self):
-        super().__init__()
-        self.setTitleBar(qf.MSFluentTitleBar(self))
-
-
-
-class HwndListWidget(MicaWindow):
+class HwndListWidget(qfr.FramelessWindow):
     def __init__(self):
         super().__init__()
         self._windows = []  # list of (hwnd:int, title:str)
@@ -41,15 +32,11 @@ class HwndListWidget(MicaWindow):
         self._connect_signals()
         self.refresh()
 
-        # 设置样式
-        cfg.themeChanged.connect(self.setQss)
-
-    def setQss(self):
-        self.setStyleSheet(cfg.getQssFile("hwnd_list_widget"))
-
     def _setup_ui(self):
-        self.setWindowTitle("Window Handle List")
         self.resize(800, 600)
+        self.setTitleBar(qf.SplitTitleBar(self))
+        self.setWindowTitle("句柄查找")
+
         self.setContentsMargins(10, 50, 10, 10)
 
         self.filter_edit = qf.LineEdit(self)
@@ -81,6 +68,8 @@ class HwndListWidget(MicaWindow):
         self.filter_edit.textChanged.connect(self._apply_filter)
         self.list_widget.itemDoubleClicked.connect(self._on_item_activated)
         self.list_widget.customContextMenuRequested.connect(self._on_context_menu)
+        # 设置样式
+        cfg.themeChanged.connect(self.setQss)
 
     def refresh(self):
         self._windows = self._enumerate_windows()
@@ -93,21 +82,23 @@ class HwndListWidget(MicaWindow):
         for hwnd, title in self._windows:
             if not text or text in title.lower():
                 item = qtWidget.QListWidgetItem(f"{hwnd:#010x}  {title}")
-                item.setData(qtCore.Qt.ItemDataRole.UserRole, hwnd)  # UNCOMMENT THIS!
+                item.setData(qtCore.Qt.ItemDataRole.UserRole, hwnd)
                 self.list_widget.addItem(item)
 
-    def _on_item_activated(self, item):
-        hwnd = item.data(qtCore.Qt.ItemDataRole.UserRole)
-        self.selected_hwnd.emit(hwnd)
+    def _on_item_activated(self, item:qtWidget.QListWidgetItem):
+        # 选项被激活了
+        log.debug(item.text())
+        log.debug("my go to home. bey~")
+
 
     def _on_context_menu(self, pos):
         item = self.list_widget.itemAt(pos)
         if item is None:
             return
         hwnd = item.data(qtCore.Qt.ItemDataRole.UserRole)
-        menu = qtWidget.QMenu(self)
-        copy_action = menu.addAction("Copy HWND")
-        bring_action = menu.addAction("Bring to Front")
+        menu = qf.RoundMenu("Action",self)
+        copy_action = menu.addAction(qf.Action("Copy HWND"))
+        bring_action = menu.addAction(qf.Action("Bring to Front"))
         action = menu.exec_(self.list_widget.mapToGlobal(pos))
         if action == copy_action:
             clipboard = qtWidget.QApplication.clipboard()
@@ -148,3 +139,6 @@ class HwndListWidget(MicaWindow):
             # Non-Windows or failure: provide an empty list
             pass
         return windows
+    
+    def setQss(self):
+        self.setStyleSheet(cfg.getQssFile("hwnd_list_widget"))

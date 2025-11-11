@@ -40,7 +40,6 @@ log = get_logger()
 
 class MicaWindow(Window):
     """Mica 效果窗口基类"""
-
     def __init__(self):
         super().__init__()
         self.setTitleBar(MSFluentTitleBar(self))
@@ -59,7 +58,7 @@ class ImageCardWidget(MicaWindow):
         self.vBoxLayout = QVBoxLayout(self)
         self.setWindowTitle("image")
 
-        self.vBoxLayout.setContentsMargins(10, 50, 10, 10)
+        self.vBoxLayout.setContentsMargins(10, 30, 10, 10)
 
         # 竖直方向有很多组件
         view = QWidget()
