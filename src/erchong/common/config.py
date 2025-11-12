@@ -2,6 +2,7 @@ from enum import Enum
 
 import qfluentwidgets as qf
 import PyQt5.QtCore as qc
+import PyQt5.QtGui as qg
 from src.erchong.config.settings import QT_QSS_DIR, RESOURCE_DIR
 
 class Language(Enum):
@@ -50,3 +51,10 @@ class Config(qf.QConfig):
 
 cfg = Config()
 qf.qconfig.load(str(RESOURCE_DIR/"qt/config.json"), cfg)
+
+
+def create_app_icon():
+    """创建应用程序图标"""
+    pixmap = qg.QPixmap(16, 16)
+    pixmap.fill(qg.QColor(70, 130, 180))  # 钢蓝色
+    return qg.QIcon(pixmap)

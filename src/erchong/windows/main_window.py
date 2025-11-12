@@ -12,7 +12,7 @@ from qfluentwidgets import (
 from qfluentwidgets import FluentIcon as FIF
 
 from ..config.settings import WINDOW_HEIGHT, WINDOW_TITLE, WINDOW_WIDTH
-from ..widgets import GalleryCard, HomeWidget, SettingsWidget
+from ..widgets import HomeWidget, SettingsWidget
 
 
 class MainWindow(MSFluentWindow):
