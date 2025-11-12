@@ -19,3 +19,5 @@ build-backend = "hatchling.build"
 
 [tool.uv]
 resolution = "highest"
+required-environments = ["sys_platform == 'win32' and platform_machine == 'AMD64'"]
+
