@@ -1,233 +1,193 @@
-import ctypes
-from ctypes import wintypes
-from src.erchong.common.config import cfg,create_app_icon
-import os
-import sys
-import time
-from typing import TYPE_CHECKING, List, Optional
+from src.erchong.common.config import cfg
 
-import win32gui
-import PyQt5.QtCore as qtCore
-import PyQt5.QtWidgets as qtWidget
-
-import gas.util.img_util as img_util
-import gas.util.screenshot_util as screenshot_util
-import qfluentwidgets as qf
 import qframelesswindow as qfr
-import gas.util as gasUtil
+import qfluentwidgets as qf
+import PyQt5.QtWidgets as qtw
+import PyQt5.QtCore as qtc
+import PyQt5.QtGui as qtg
 
-from ..config.settings import QT_QSS_DIR, RESOURCE_DIR
-from ..utils.platform import is_win11
-from gas.util.hwnd_util import WindowInfo
+from gas.util.hwnd_util import WindowInfo, list_all_windows
 
-from ..utils.logger import get_logger
+from src.erchong.utils.logger import get_logger
 
 log = get_logger()
 
 
 class HwndListWidget(qfr.FramelessWindow):
-    def __init__(self):
-        super().__init__()
-        self._windows : List[WindowInfo] = []
-        self._setupUi()
-        self._connectSignals()
-        self.refresh()
+    """窗口句柄列表窗口"""
 
-    def _setupUi(self):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Hwnd List")
         self.resize(800, 600)
-        self.setTitleBar(qf.SplitTitleBar(self))
-        self.setWindowTitle("句柄查找")
+        self.setContentsMargins(10, 40, 10, 10)
 
-        self.setContentsMargins(10, 50, 10, 10)
+        self._setup_ui()
+        self._set_connections()
 
-        self.filterEdit = qf.LineEdit(self)
-        self.filterEdit.setPlaceholderText("Filter by title...")
+    def _setup_ui(self):
+        self.main_layout = qtw.QVBoxLayout()
 
-        self.refreshBtn = qf.PushButton("Refresh", self)
+        t_h_box = qtw.QHBoxLayout()
+        self.search_edit = qf.LineEdit(self)
+        self.search_edit.setPlaceholderText("输出窗口标题过滤")
 
-        topLayout = qtWidget.QHBoxLayout()
-        topLayout.addWidget(self.filterEdit)
-        topLayout.addWidget(self.refreshBtn)
+        self.search_btn = qf.PrimaryPushButton("搜索", self)
+        self.search_btn.setMinimumSize(100, 0)
 
-        self.treeWidget = qf.TreeWidget(self)
-        self.treeWidget.setSelectionMode(
-            qtWidget.QAbstractItemView.SelectionMode.SingleSelection
-        )
-        self.treeWidget.setSelectionBehavior(
-            qtWidget.QAbstractItemView.SelectionBehavior.SelectItems
-        )
-        # 禁用水平滑动 可能导致卡顿
-        self.treeWidget.scrollDelagate.verticalSmoothScroll.setSmoothMode(qf.SmoothMode.NO_SMOOTH)
-        self.treeWidget.setHeaderHidden(True)
-        self.treeWidget.setContextMenuPolicy(qtCore.Qt.ContextMenuPolicy.CustomContextMenu)
-        self._loaded_items = {}  # 记录已加载的项
+        self.tree_view = qf.TreeView(self)
+        self.tree_model = WindowModel(list_all_windows())
+        self.tree_view.setModel(self.tree_model)
+        self.tree_view.setHeaderHidden(False)
+        # 最后一列固定宽度
 
-        self.statusLabel = qf.label.StrongBodyLabel("", self)
-        
-        mainLayout = qtWidget.QVBoxLayout(self)
-        mainLayout.addLayout(topLayout)
-        mainLayout.addWidget(self.treeWidget)
-        mainLayout.addWidget(self.statusLabel)
+        self.tree_view.setColumnWidth(1, 200)
+        self.tree_view.header().setSectionResizeMode(0, qtw.QHeaderView.ResizeMode.ResizeToContents)
+        self.tree_view.header().setSectionResizeMode(1, qtw.QHeaderView.ResizeMode.Interactive)
+        self.tree_view.header().setSectionResizeMode(2, qtw.QHeaderView.ResizeMode.ResizeToContents)
 
-    def _connectSignals(self):
-        self.refreshBtn.clicked.connect(self.refresh)
-        self.filterEdit.textChanged.connect(self._applyFilter)
-        self.treeWidget.itemDoubleClicked.connect(self._onItemActivated)
-        self.treeWidget.customContextMenuRequested.connect(self._onContextMenu)
-        self.treeWidget.itemExpanded.connect(self._on_item_expanded)
-        # 设置样式
-        cfg.themeChanged.connect(self.setQss)
+        t_h_box.addWidget(self.search_edit)
+        t_h_box.addWidget(self.search_btn)
 
-    def refresh(self):
-        self._windows = self._enumerate_windows()
-        self._applyFilter()
-        self.statusLabel.setText(f"{len(self._windows)} windows found")
+        self.main_layout.addLayout(t_h_box)
+        self.main_layout.addWidget(self.tree_view)
 
-    def _applyFilter(self):
-        text = self.filterEdit.text().lower()
-        self.treeWidget.clear()
-        
-        # 递归遍历窗口树
-        for window_info in self._windows:
-            if window_info.parent is None and window_info.title != "":  # 只处理根窗口
-                self._addWindowToTree(window_info, text, None)
+        self.setLayout(self.main_layout)
 
-    def _on_item_expanded(self, item):
-        """当项展开时加载子节点"""
-        window_info = item.data(0, qtCore.Qt.ItemDataRole.UserRole)
-        if not window_info:
-            return
-        
-        log.debug(f"懒加载了 hwnd:{window_info.hwnd}")
-        # 检查是否已经加载过
-        if self._loaded_items.get(window_info.hwnd, True):  # 默认True表示已加载
-            return
-        
-        # 移除占位项
-        if item.childCount() == 1 and item.child(0).text(0) == '加载中...':
-            item.takeChild(0)  # 使用takeChild而不是removeChild
-        
-        # 加载实际子节点
-        if window_info.children:
-            for child_window in window_info.children:
-                self._addWindowToTree(child_window, "", item)
-        
-        # 标记为已加载
-        self._loaded_items[window_info.hwnd] = True
+    def _set_connections(self):
+        cfg.themeChanged.connect(self._set_qss)
 
-    def _addWindowToTree(self, window_info: WindowInfo, filter_text: str, parent_item: Optional[qtWidget.QTreeWidgetItem]):
-        """递归添加窗口到 tree widget"""
-        title_empty = not window_info.title.strip()
+        self.tree_view.clicked.connect(self._on_tree_view_clicked)
+        self.search_btn.clicked.connect(self._on_search_clicked)
 
-        # 统一的过滤逻辑
-        should_show = (not filter_text or window_info.is_visible or
-                    (not title_empty and filter_text in window_info.title.lower()) or 
-                    filter_text in window_info.class_name.lower())
-
-        if should_show:
-            # 创建 item
-            if parent_item is None:
-                # 根节点
-                item = qtWidget.QTreeWidgetItem(self.treeWidget, [''])
-            else:
-                # 子节点
-                item = qtWidget.QTreeWidgetItem(parent_item, [''])
-            
-            # 创建 card 组件
-            card = AppCard(
-                create_app_icon(),
-                title=window_info.title,
-                content=f"{window_info.class_name} | {window_info.size[0]}x{window_info.size[1]}",
-            )
-            
-            # 设置 item 大小
-            item.setSizeHint(0, card.sizeHint())
-            self.treeWidget.setItemWidget(item, 0, card)
-            item.setData(0, qtCore.Qt.ItemDataRole.UserRole, window_info)
-
-            # 如果有子窗口，添加一个占位项
-            if window_info.children:
-                placeholder = qtWidget.QTreeWidgetItem(['加载中...'])
-                item.addChild(placeholder)
-                # 使用窗口句柄作为key存储加载状态
-                self._loaded_items[window_info.hwnd] = False
-            
-            if parent_item:
-                parent_item.setExpanded(True)
-
-    def _onItemActivated(self, item:qtWidget.QTreeWidgetItem,column):
-        # 获取存储的 WindowInfo 对象
-        window_info = item.data(0, qtCore. Qt.ItemDataRole.UserRole)
-        if window_info:
-            log.debug(f"双击窗口: {window_info.title}")
-            log.debug(f"HWND: {window_info.hwnd}")
-            log.debug(f"类名: {window_info.class_name}")
-            log.debug(f"位置: {window_info.position}")
-            log.debug(f"大小: {window_info.size}")
-
-
-    def _onContextMenu(self, pos):
-        item = self.treeWidget.itemAt(pos)
-        if item is None:
-            return
-        window_info = item.data(0, qtCore. Qt.ItemDataRole.UserRole)
-        if window_info is None:
-            return
-        
-        menu = qf.RoundMenu("Action",self)
-        copy_action = menu.addAction(qf.Action("Copy HWND"))
-        bring_action = menu.addAction(qf.Action("Bring to Front"))
-        action = menu.exec_(self.treeWidget.mapToGlobal(pos))
-        if action == copy_action:
-            clipboard = qtWidget.QApplication.clipboard()
-            if clipboard:
-                clipboard.setText(hex(window_info.hwnd))
-        elif action == bring_action:
-            try:
-                gasUtil.hwnd_util.window_activate(window_info.hwnd)
-            except Exception:
-                pass
-
-    def _enumerate_windows(self) -> List[gasUtil.hwnd_util.WindowInfo]:
-        windowsTree = []
-        try:
-            windowsTree = gasUtil.hwnd_util.list_all_windows()
-        except Exception:
-            # Non-Windows or failure: provide an empty list
-            pass
-        return windowsTree
-    
-    def setQss(self):
+    def _set_qss(self):
         self.setStyleSheet(cfg.getQssFile("hwnd_list_widget"))
 
-class AppCard(qf.CardWidget):
+    def _on_tree_view_clicked(self, index: qtc.QModelIndex):
+        node: WindowInfo = index.internalPointer()
+        info = f"Hwnd: {node.hwnd}\nTitle: {node.title}\nClass: {node.class_name}\nVisible: {node.is_visible}\nRect: {node.position} {node.size} \n"
+        qf.MessageBox("窗口信息", info, self)
 
-    def __init__(self, icon, title, content, parent=None):
-        super().__init__(parent)
-        
-        self.h_box_layout = qtWidget.QHBoxLayout(self)
-        self.h_box_layout.setContentsMargins(8, 4, 8, 4)
-        self.h_box_layout.setSpacing(6)
-        
-        # 图标
-        self.icon_label = qf.IconWidget(icon)
-        self.icon_label.setFixedSize(16, 16)
-        self.h_box_layout.addWidget(self.icon_label)
-        
-        # 标题
-        self.title_label = qf.StrongBodyLabel(title)
-        self.h_box_layout.addWidget(self.title_label)
-        
-        # 弹性空间
-        self.h_box_layout.addStretch(1)
-        
-        # 类名
-        self.content_label = qf.CaptionLabel(content)
-        self.h_box_layout.addWidget(self.content_label)
-        
-        # 固定高度，宽度自适应
-        self.setFixedHeight(30)
-        self.setSizePolicy(
-            qtWidget.QSizePolicy.Policy.Expanding,
-            qtWidget.QSizePolicy.Policy.Fixed
-        )
+    def _on_search_clicked(self):
+        filter_text = self.search_edit.text().strip().lower()
+        if not filter_text:
+            self.tree_model = WindowModel(list_all_windows())
+        else:
+            all_windows = list_all_windows()
+            filtered_windows = [w for w in all_windows if filter_text in (w.title or "").lower()]
+            self.tree_model = WindowModel(filtered_windows)
+        self.tree_view.setModel(self.tree_model)
+
+
+class WindowModel(qtc.QAbstractItemModel):
+    """窗口模型"""
+
+    def __init__(self, windowsList: list[WindowInfo] = None):
+        super().__init__()
+        self.root_node_list = windowsList if windowsList else []
+
+        # 过滤一下 不可见窗口
+        self.root_node_list = [node for node in self.root_node_list if node.is_visible]
+
+        log.debug(f"WindowModel initialized with {len(self.root_node_list)} root nodes.")
+
+    def index(self, row, column, parent=qtc.QModelIndex()):
+        if not self.hasIndex(row, column, parent):
+            return qtc.QModelIndex()
+
+        if not parent.isValid():
+            # 根节点的子节点
+            if row < len(self.root_node_list):
+                child_node = self.root_node_list[row]
+                return self.createIndex(row, column, child_node)
+        else:
+            # 其他节点的子节点
+            parent_node = parent.internalPointer()
+            if row < len(parent_node.children):
+                child_node = parent_node.children[row]
+                return self.createIndex(row, column, child_node)
+
+        return qtc.QModelIndex()
+
+    def parent(self, index):
+        if not index.isValid():
+            return qtc.QModelIndex()
+
+        child_node = index.internalPointer()
+        parent_node = child_node.parent
+
+        if parent_node is None:
+            return qtc.QModelIndex()
+
+        grandparent_node = parent_node.parent
+        if grandparent_node is None:
+            for row, node in enumerate(self.root_node_list):
+                if node == parent_node:
+                    return self.createIndex(row, 0, parent_node)
+        else:
+            for row, node in enumerate(grandparent_node.children):
+                if node == parent_node:
+                    return self.createIndex(row, 0, parent_node)
+
+        return qtc.QModelIndex()
+
+    def rowCount(self, parent=qtc.QModelIndex()):
+        if not parent.isValid():
+            return len(self.root_node_list)
+        return len(parent.internalPointer().children)
+
+    def columnCount(self, parent=...):
+        return 3
+
+    def data(self, index, role: int = ...):
+        if not index.isValid():
+            return None
+        node = index.internalPointer()
+        column = index.column()
+
+        if role == qtc.Qt.ItemDataRole.DisplayRole:
+            if column == 0:
+                # 第一列：窗口名称
+                title = node.title if hasattr(node, "title") and node.title else "无标题"
+                return title
+            elif column == 1:
+                # 第二列：类名
+                class_name = node.class_name if hasattr(node, "class_name") else "未知类"
+                return class_name
+            elif column == 2:
+                # 第三列：窗口大小
+                if hasattr(node, "size") and node.size:
+                    width, height = node.size
+                    return f"{width} x {height}"
+                else:
+                    return "未知大小"
+
+        elif role == qtc.Qt.ItemDataRole.ToolTipRole:
+            # 工具提示显示完整信息
+            title = node.title if hasattr(node, "title") and node.title else "无标题"
+            class_name = node.class_name if hasattr(node, "class_name") else "未知类"
+            hwnd = node.hwnd if hasattr(node, "hwnd") else "未知"
+            if hasattr(node, "size") and node.size:
+                width, height = node.size
+                size_info = f"{width} x {height}"
+            else:
+                size_info = "未知大小"
+
+            return f"窗口: {title}\n类名: {class_name}\n大小: {size_info}\nHWND: {hwnd}"
+
+        elif role == qtc.Qt.ItemDataRole.UserRole:
+            # 返回节点对象用于其他用途
+            return node
+
+        elif role == qtc.Qt.ItemDataRole.TextAlignmentRole:
+            return qtc.Qt.AlignmentFlag.AlignLeft | qtc.Qt.AlignmentFlag.AlignVCenter
+
+        return None
+
+    def headerData(self, section, orientation, role=qtc.Qt.ItemDataRole.DisplayRole):
+        """设置表头"""
+        if orientation == qtc.Qt.Orientation.Horizontal and role == qtc.Qt.ItemDataRole.DisplayRole:
+            headers = ["窗口名称", "类名", "窗口大小"]
+            if section < len(headers):
+                return headers[section]
+        return None

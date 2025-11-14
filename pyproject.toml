@@ -8,6 +8,7 @@ dependencies = [
     "PyQt5==5.15.11",
     "pyqt5_sip==12.17.1",
     "pyqt-fluent-widgets==1.9.2",
+    "gas",
 ]
 
 [project.scripts]
@@ -19,5 +20,9 @@ build-backend = "hatchling.build"
 
 [tool.uv]
 resolution = "highest"
-required-environments = ["sys_platform == 'win32' and platform_machine == 'AMD64'"]
+required-environments = [
+    "sys_platform == 'win32' and platform_machine == 'AMD64'",
+]
 
+[tool.uv.sources]
+gas = { git = "https://github.com/1821454893q/game_ocr_script.git", rev = "v0.0.2" }

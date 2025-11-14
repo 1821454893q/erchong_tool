@@ -94,9 +94,7 @@ class HomeWidget(QWidget):
             chooseButton,
         )
         settingGroupCard.addGroup("", "运行终端", "设置是否显示命令行终端", comboBox)
-        group = settingGroupCard.addGroup(
-            "", "入口脚本", "选择软件的入口脚本", lineEdit
-        )
+        group = settingGroupCard.addGroup("", "入口脚本", "选择软件的入口脚本", lineEdit)
         group.setSeparatorVisible(True)
 
         # 添加底部工具栏
