@@ -10,10 +10,14 @@ from qfluentwidgets import (
     setTheme,
     Theme,
 )
-from qfluentwidgets import FluentIcon as FIF
+from qfluentwidgets import FluentIcon as FIF, SystemThemeListener
 
 from ..config.settings import WINDOW_HEIGHT, WINDOW_TITLE, WINDOW_WIDTH
 from ..widgets import HomeWidget, SettingsWidget
+
+from src.erchong.utils.logger import get_logger
+
+log = get_logger()
 
 
 class MainWindow(MSFluentWindow):
@@ -21,8 +25,13 @@ class MainWindow(MSFluentWindow):
 
     def __init__(self):
         super().__init__()
+        # create system theme listener
+        self.themeListener = SystemThemeListener(self)
+
         self.initNavigation()
         self.initWindow()
+
+        self.themeListener.start()
 
     def initNavigation(self):
         """初始化导航"""
@@ -66,3 +75,9 @@ class MainWindow(MSFluentWindow):
             setTheme(Theme.LIGHT)
         else:
             setTheme(Theme.DARK)
+
+    def closeEvent(self, e):
+        log.debug("closeEvent")
+        self.themeListener.terminate()
+        self.themeListener.deleteLater()
+        super().closeEvent(e)

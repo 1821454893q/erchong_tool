@@ -1,7 +1,7 @@
 import threading
 import time
 import cv2
-from src.erchong.common.config import cfg
+from src.erchong.common.style_sheet import StyleSheet
 from enum import IntEnum
 
 import qframelesswindow as qfr
@@ -46,6 +46,8 @@ class ImageCardWidget(qfr.FramelessWindow):
         self.sereenshot_thread.daemon = True
         self.sereenshot_thread.start()
 
+        StyleSheet.IMAGE_CARD_WIDGET.apply(self)
+
     def _setup_ui(self):
         self.main_layout = qtw.QVBoxLayout()
 
@@ -84,7 +86,6 @@ class ImageCardWidget(qfr.FramelessWindow):
         self.setLayout(self.main_layout)
 
     def _set_connections(self):
-        cfg.themeChanged.connect(lambda: self.setStyleSheet(cfg.getQssFile("image_card_widget")))
         self.pause_button.clicked.connect(self.toggle_pause)
 
     def toggle_pause(self):

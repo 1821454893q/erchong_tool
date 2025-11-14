@@ -1,4 +1,4 @@
-from src.erchong.common.config import cfg
+from src.erchong.common.style_sheet import StyleSheet
 import qframelesswindow as qfr
 import qfluentwidgets as qf
 import PyQt5.QtWidgets as qtw
@@ -22,6 +22,8 @@ class HwndListWidget(qfr.FramelessWindow):
 
         self._setup_ui()
         self._set_connections()
+
+        StyleSheet.HWND_LIST_WIDGET.apply(self)
 
     def _setup_ui(self):
         self.main_layout = qtw.QVBoxLayout()
@@ -54,14 +56,10 @@ class HwndListWidget(qfr.FramelessWindow):
         self.setLayout(self.main_layout)
 
     def _set_connections(self):
-        cfg.themeChanged.connect(self._set_qss)
 
         self.tree_view.clicked.connect(self._on_tree_view_clicked)
         self.tree_view.customContextMenuRequested.connect(self._on_tree_view_menu)
         self.search_btn.clicked.connect(self._on_search_clicked)
-
-    def _set_qss(self):
-        self.setStyleSheet(cfg.getQssFile("hwnd_list_widget"))
 
     def _on_tree_view_clicked(self, index: qtc.QModelIndex):
         node: WindowInfo = index.internalPointer()
@@ -107,6 +105,7 @@ class HwndListWidget(qfr.FramelessWindow):
         def handler():
             widget = ImageCardWidget(node)
             widget.show()
+
         return handler
 
 
