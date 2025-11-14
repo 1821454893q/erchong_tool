@@ -1,154 +1,173 @@
-"""图片卡片组件"""
-
-import os
+import threading
 import time
-from typing import (
-    TYPE_CHECKING,
-)
-from src.erchong.common.config import (
-    cfg,
-)
+import cv2
+from src.erchong.common.config import cfg
+from enum import IntEnum
 
-import win32gui
-from PyQt5.QtCore import (
-    Qt,
-    QEasingCurve,
-)
-from PyQt5.QtWidgets import (
-    QVBoxLayout,
-    QWidget,
-)
+import qframelesswindow as qfr
+import qfluentwidgets as qf
+import PyQt5.QtWidgets as qtw
+import PyQt5.QtCore as qtc
+import PyQt5.QtGui as qtg
 
-import gas.util.img_util as img_util
-import gas.util.screenshot_util as screenshot_util
-from qfluentwidgets import (
-    ImageLabel,
-    MSFluentTitleBar,
-    PrimaryPushButton,
-    SmoothScrollArea,
-    ScrollArea,
-    isDarkTheme,
-)
+from gas.util.hwnd_util import WindowInfo
+from gas.util.screenshot_util import screenshot, screenshot_bitblt
 
-from ..config.settings import (
-    QT_QSS_DIR,
-    RESOURCE_DIR,
-)
-from ..utils.platform import (
-    is_win11,
-)
-
-if TYPE_CHECKING:
-    from qframelesswindow import (
-        AcrylicWindow,
-        FramelessWindow,
-    )
-
-    Window = AcrylicWindow  # type: ignore
-else:
-    if is_win11():
-        from qframelesswindow import (
-            AcrylicWindow as Window,
-        )
-    else:
-        from qframelesswindow import (
-            FramelessWindow as Window,
-        )
-
-from ..utils.logger import (
-    get_logger,
-)
+from src.erchong.utils.logger import get_logger
 
 log = get_logger()
 
 
-class MicaWindow(Window):
-    """Mica 效果窗口基类"""
+class ScreenshotMode(IntEnum):
+    PrintWindow = 0
+    Bitblt = 1
 
-    def __init__(
-        self,
-    ):
-        super().__init__()
-        self.setTitleBar(MSFluentTitleBar(self))
-        if is_win11():
-            self.windowEffect.setMicaEffect(
-                self.winId(),
-                isDarkTheme(),
-            )
+    def __str__(self):
+        return self.name
 
 
-class ImageCardWidget(MicaWindow):
-    """图片卡片窗口"""
+class ImageCardWidget(qfr.FramelessWindow):
+    """根据hwnd显示窗口"""
 
-    def __init__(
-        self,
-        parent=None,
-    ):
-        super().__init__()
+    def __init__(self, windows: WindowInfo = None, parent=None):
+        super().__init__(parent)
 
-        self.imageLabel = ImageLabel(
-            str(RESOURCE_DIR / "shoko1.jpg"),
-            self,
-        )
-        self.gifLabel = ImageLabel(
-            str(RESOURCE_DIR / "shoko2.jpg"),
-            self,
-        )
-        self.vBoxLayout = QVBoxLayout(self)
-        self.setWindowTitle("image")
+        self.windows = windows
+        self.setContentsMargins(10, 20, 10, 10)
 
-        self.vBoxLayout.setContentsMargins(
-            10,
-            30,
-            10,
-            10,
-        )
+        # 添加暂停状态控制
+        self.is_paused = False
 
-        # 竖直方向有很多组件
-        view = QWidget()
-        self.viewLayout = QVBoxLayout(view)
+        self._setup_ui()
+        self._set_connections()
 
-        self.viewLayout.addWidget(self.imageLabel)
-        self.viewLayout.addWidget(self.gifLabel)
+        # 启动一个线程专门更新image_label
+        self.sereenshot_thread = threading.Thread(target=self.update_frame)
+        self.sereenshot_thread.daemon = True
+        self.sereenshot_thread.start()
 
-        self.scrollArea = ScrollArea(self)
-        self.scrollArea.setWidget(view)
-        self.scrollArea.resize(
-            1200,
-            800,
-        )
+    def _setup_ui(self):
+        self.main_layout = qtw.QVBoxLayout()
 
-        btn = PrimaryPushButton("截图")
-        btn.clicked.connect(self.capture)
+        # 第一行：截图方式说明 + 选择框 + 暂停/继续按钮
+        first_row_layout = qtw.QHBoxLayout()
 
-        self.vBoxLayout.addWidget(self.scrollArea)
-        self.vBoxLayout.addWidget(btn)
-        # 设置样式
-        cfg.themeChanged.connect(self.setQss)
+        # 截图方式说明标签
+        self.mode_label = qf.BodyLabel("截图方式:", self)
 
-    def setQss(
-        self,
-    ):
-        self.setStyleSheet(cfg.getQssFile("image_card_widget"))
+        # 截图方式选择框
+        self.screenshot_mode_combo = qf.ComboBox(self)
+        self.screenshot_mode_combo.addItem(ScreenshotMode.PrintWindow.name, userData=ScreenshotMode.PrintWindow)
+        self.screenshot_mode_combo.addItem(ScreenshotMode.Bitblt.name, userData=ScreenshotMode.Bitblt)
 
-    def capture(
-        self,
-    ):
-        """截图功能"""
-        screenshot = screenshot_util.screenshot_bitblt(
-            win32gui.GetDesktopWindow(),
-            (
-                500,
-                500,
-                700,
-                700,
-            ),
-        )
-        f = f"{int(time.time())}.png"
-        img_util.save_img(
-            screenshot,
-            f,
-        )
-        label = ImageLabel(f)
-        self.viewLayout.addWidget(label)
-        os.remove(f)
+        # 暂停/继续按钮
+        self.pause_button = qf.PushButton("暂停", self)
+
+        first_row_layout.addWidget(self.mode_label)
+        first_row_layout.addWidget(self.screenshot_mode_combo)
+        first_row_layout.addStretch(1)  # 添加弹性空间
+        first_row_layout.addWidget(self.pause_button)
+
+        # 第二行：状态标签
+        self.status_label = qf.BodyLabel(self)
+        self.status_label.setWordWrap(True)  # 允许自动换行
+
+        # 图像显示
+        self.image_label = qf.ImageLabel(self)
+        w, h = self.windows.size
+        self.image_label.setFixedSize(w, h)
+
+        # 添加到主布局
+        self.main_layout.addLayout(first_row_layout)
+        self.main_layout.addWidget(self.status_label)
+        self.main_layout.addWidget(self.image_label)
+        self.setLayout(self.main_layout)
+
+    def _set_connections(self):
+        cfg.themeChanged.connect(lambda: self.setStyleSheet(cfg.getQssFile("image_card_widget")))
+        self.pause_button.clicked.connect(self.toggle_pause)
+
+    def toggle_pause(self):
+        """切换暂停/继续状态"""
+        self.is_paused = not self.is_paused
+        if self.is_paused:
+            self.pause_button.setText("继续")
+        else:
+            self.pause_button.setText("暂停")
+
+    def update_frame(self):
+        """更新image_label帧"""
+        while True:
+            # 如果暂停，等待一段时间后继续检查
+            if self.is_paused:
+                time.sleep(0.1)
+                continue
+
+            old_time = time.time_ns() // 1_000_000  # 当前毫秒
+            if not hasattr(self, "last_fps_time"):
+                self.last_fps_time = old_time
+                self.frame_count = 0
+                self.current_fps = 0
+
+            combo_data = self.screenshot_mode_combo.currentData()
+            scr = None
+            if combo_data == ScreenshotMode.PrintWindow:
+                scr = screenshot(self.windows.hwnd)
+            elif combo_data == ScreenshotMode.Bitblt:
+                scr = screenshot_bitblt(self.windows.hwnd)
+
+            if scr is None:
+                time.sleep(1)
+                continue
+
+            self.image_label.setImage(self.numpy_array_to_qpixmap(scr))
+
+            # 计算帧数
+            self.frame_count += 1
+            time_elapsed = old_time - self.last_fps_time
+            if time_elapsed > 1000:
+                self.current_fps = self.frame_count / (time_elapsed / 1000.0)
+                self.frame_count = 0
+                self.last_fps_time = old_time
+
+            # 使用换行符替换 | 符号
+            status_text = f"HWND: {self.windows.hwnd} | Title: {self.windows.title} | Capture method: {combo_data} | FPS: {self.current_fps:.1f}"
+            self.status_label.setText(status_text)
+
+            # 控制帧率，避免占用过多CPU
+            # time.sleep(0.03)  # 大约30fps
+
+    def numpy_array_to_qpixmap(self, img_array) -> qtg.QPixmap:
+        """
+        将numpy数组(BGR格式)转换为QPixmap
+
+        Args:
+            img_array: numpy数组，BGR格式，形状为 (height, width, 3)
+
+        Returns:
+            QPixmap对象
+        """
+        if img_array is None or img_array.size == 0:
+            return None
+
+        try:
+            # 获取图像尺寸
+            height, width, channel = img_array.shape
+
+            # 确保是3通道图像
+            if channel != 3:
+                return None
+
+            # 将BGR转换为RGB
+            rgb_image = cv2.cvtColor(img_array, cv2.COLOR_BGR2RGB)
+
+            # 创建QImage
+            bytes_per_line = 3 * width
+            q_image = qtg.QImage(rgb_image.data, width, height, bytes_per_line, qtg.QImage.Format.Format_RGB888)
+
+            # 转换为QPixmap
+            return qtg.QPixmap.fromImage(q_image)
+
+        except Exception as e:
+            print(f"图像转换失败: {e}")
+            return None

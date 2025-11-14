@@ -1,5 +1,4 @@
 ImageCardWidget {
-    border: 25px;
     background-color: rgb(39, 39, 39);
 }
 

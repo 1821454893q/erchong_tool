@@ -1,4 +1,5 @@
 """主窗口"""
+
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon, QScreen
 from PyQt5.QtWidgets import QApplication
@@ -55,11 +56,9 @@ class MainWindow(MSFluentWindow):
         self.setWindowIcon(QIcon(":/qfluentwidgets/images/logo.png"))
         self.setWindowTitle(WINDOW_TITLE)
 
-        screen = QApplication.primaryScreen()
-        if screen:
-            geometry = screen.availableGeometry()
-            w, h = geometry.width(), geometry.height()
-            self.move(w // 2 - self.width() // 2, h // 2 - self.height() // 2)
+        desktop = QApplication.desktop().availableGeometry()
+        w, h = desktop.width(), desktop.height()
+        self.move(w // 2 - self.width() // 2, h // 2 - self.height() // 2)
 
     def switchTheme(self):
         """切换主题"""
@@ -67,4 +66,3 @@ class MainWindow(MSFluentWindow):
             setTheme(Theme.LIGHT)
         else:
             setTheme(Theme.DARK)
-

@@ -26,22 +26,10 @@ from qfluentwidgets import (
     isDarkTheme,
 )
 
-import qframelesswindow as qfw
-import qfluentwidgets as qf
-from ..config.settings import RESOURCE_DIR
-from ..utils.platform import is_win11
-from .image_card_widget import ImageCardWidget
-from .hwnd_list_widget import HwndListWidget
-
-if TYPE_CHECKING:
-    from qframelesswindow import AcrylicWindow, FramelessWindow
-
-    Window = AcrylicWindow  # type: ignore
-else:
-    if is_win11():
-        from qframelesswindow import AcrylicWindow as Window
-    else:
-        from qframelesswindow import FramelessWindow as Window
+from src.erchong.config.settings import RESOURCE_DIR
+from src.erchong.utils.platform import is_win11
+from src.erchong.widgets.image_card_widget import ImageCardWidget
+from src.erchong.widgets.hwnd_list_widget import HwndListWidget
 
 
 class HomeWidget(QWidget):
@@ -50,63 +38,31 @@ class HomeWidget(QWidget):
     def __init__(self, objectName: str, parent=None):
         super().__init__(parent=parent)
         self.setObjectName(objectName)
-        self.setup_ui()
+        self._setup_ui()
+        self._set_connections()
 
-    def setup_ui(self):
+    def _setup_ui(self):
         """设置界面"""
-        settingGroupCard = GroupHeaderCardWidget()
-        settingGroupCard.setTitle("基本设置")
-        settingGroupCard.setBorderRadius(8)
+        self.main_layout = QVBoxLayout(self)
 
-        chooseButton = PushButton("选择")
-        comboBox = ComboBox()
-        lineEdit = SearchLineEdit()
-        hintIcon = IconWidget(InfoBarIcon.INFORMATION)
-        hintLabel = BodyLabel("点击编译按钮以开始打包 👉")
-        compileButton = PrimaryPushButton(FluentIcon.PLAY_SOLID, "编译")
-        compileButton.clicked.connect(self.openHwnd)
-        openButton = PushButton(FluentIcon.VIEW, "打开")
-        openButton.clicked.connect(self.open)
-        bottomLayout = QHBoxLayout()
+        self.set_group_card = GroupHeaderCardWidget()
+        self.set_group_card.setTitle("基本设置")
+        self.set_group_card.setBorderRadius(8)
 
-        chooseButton.setFixedWidth(120)
-        lineEdit.setFixedWidth(320)
-        comboBox.setFixedWidth(320)
-        comboBox.addItems(["始终显示（首次打包时建议启用）", "始终隐藏"])
-        lineEdit.setPlaceholderText("输入入口脚本的路径")
-
-        # 设置底部工具栏布局
-        hintIcon.setFixedSize(16, 16)
-        bottomLayout.setSpacing(10)
-        bottomLayout.setContentsMargins(24, 15, 24, 20)
-        bottomLayout.addWidget(hintIcon, 0, Qt.AlignmentFlag.AlignLeft)
-        bottomLayout.addWidget(hintLabel, 0, Qt.AlignmentFlag.AlignLeft)
-        bottomLayout.addStretch(1)
-        bottomLayout.addWidget(openButton, 0, Qt.AlignmentFlag.AlignRight)
-        bottomLayout.addWidget(compileButton, 0, Qt.AlignmentFlag.AlignRight)
-        bottomLayout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-
-        # 添加组件到分组中
-        settingGroupCard.addGroup(
-            "",
-            "构建目录",
-            "选择 Nuitka 的输出目录",
-            chooseButton,
+        self.capture_btn = PrimaryPushButton("测试")
+        self.set_group_card.addGroup(
+            icon=FluentIcon.ERASE_TOOL, title="测试截图", content="用于测试截图功能是否正常", widget=self.capture_btn
         )
-        settingGroupCard.addGroup("", "运行终端", "设置是否显示命令行终端", comboBox)
-        group = settingGroupCard.addGroup("", "入口脚本", "选择软件的入口脚本", lineEdit)
-        group.setSeparatorVisible(True)
 
-        # 添加底部工具栏
-        settingGroupCard.vBoxLayout.addLayout(bottomLayout)
+        self.detail_label = BodyLabel("开发者: jian 邮箱: 不说了")
 
-        layout = QVBoxLayout(self)
-        layout.addWidget(settingGroupCard)
+        self.main_layout.addWidget(self.set_group_card)
+        self.main_layout.addStretch(1)
+        # self.main_layout.addWidget(self.detail_label)
+        self.setLayout(self.main_layout)
 
-    def open(self):
-        """打开图片卡片窗口"""
-        widget = ImageCardWidget(self)
-        widget.show()
+    def _set_connections(self):
+        self.capture_btn.clicked.connect(self.openHwnd)
 
     def openHwnd(self):
         widget = HwndListWidget()

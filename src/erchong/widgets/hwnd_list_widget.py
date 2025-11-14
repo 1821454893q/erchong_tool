@@ -1,14 +1,12 @@
 from src.erchong.common.config import cfg
-
 import qframelesswindow as qfr
 import qfluentwidgets as qf
 import PyQt5.QtWidgets as qtw
 import PyQt5.QtCore as qtc
 import PyQt5.QtGui as qtg
-
 from gas.util.hwnd_util import WindowInfo, list_all_windows
-
 from src.erchong.utils.logger import get_logger
+from src.erchong.widgets.image_card_widget import ImageCardWidget
 
 log = get_logger()
 
@@ -39,6 +37,7 @@ class HwndListWidget(qfr.FramelessWindow):
         self.tree_model = WindowModel(list_all_windows())
         self.tree_view.setModel(self.tree_model)
         self.tree_view.setHeaderHidden(False)
+        self.tree_view.setContextMenuPolicy(qtc.Qt.ContextMenuPolicy.CustomContextMenu)
         # 最后一列固定宽度
 
         self.tree_view.setColumnWidth(1, 200)
@@ -58,6 +57,7 @@ class HwndListWidget(qfr.FramelessWindow):
         cfg.themeChanged.connect(self._set_qss)
 
         self.tree_view.clicked.connect(self._on_tree_view_clicked)
+        self.tree_view.customContextMenuRequested.connect(self._on_tree_view_menu)
         self.search_btn.clicked.connect(self._on_search_clicked)
 
     def _set_qss(self):
@@ -68,6 +68,31 @@ class HwndListWidget(qfr.FramelessWindow):
         info = f"Hwnd: {node.hwnd}\nTitle: {node.title}\nClass: {node.class_name}\nVisible: {node.is_visible}\nRect: {node.position} {node.size} \n"
         qf.MessageBox("窗口信息", info, self)
 
+    def _on_tree_view_menu(self, position):
+        index = self.tree_view.indexAt(position)
+        if not index.isValid():
+            return
+
+        node: WindowInfo = index.internalPointer()
+
+        menu = qf.RoundMenu()
+
+        menu.addActions(
+            [
+                qf.Action("复制 HWND", self, triggered=lambda: qtw.QApplication.clipboard().setText(str(node.hwnd))),
+                qf.Action("复制 标题", self, triggered=lambda: qtw.QApplication.clipboard().setText(node.title or "")),
+                qf.Action(
+                    "复制 类名", self, triggered=lambda: qtw.QApplication.clipboard().setText(node.class_name or "")
+                ),
+            ]
+        )
+        # 添加分割线
+        menu.addSeparator()
+        menu.addAction(qf.Action("刷新列表", self, triggered=self._on_search_clicked))
+        menu.addAction(qf.Action("打开测试截图", self, triggered=self._on_test_screenshot_clicked(node)))
+
+        menu.exec(self.tree_view.viewport().mapToGlobal(position))
+
     def _on_search_clicked(self):
         filter_text = self.search_edit.text().strip().lower()
         if not filter_text:
@@ -77,6 +102,12 @@ class HwndListWidget(qfr.FramelessWindow):
             filtered_windows = [w for w in all_windows if filter_text in (w.title or "").lower()]
             self.tree_model = WindowModel(filtered_windows)
         self.tree_view.setModel(self.tree_model)
+
+    def _on_test_screenshot_clicked(self, node: WindowInfo):
+        def handler():
+            widget = ImageCardWidget(node)
+            widget.show()
+        return handler
 
 
 class WindowModel(qtc.QAbstractItemModel):
