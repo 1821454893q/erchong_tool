@@ -14,7 +14,7 @@ from qfluentwidgets import FluentIcon as FIF, SystemThemeListener
 
 from erchong.widgets.annotation_widget import AnnotationWidget
 from src.erchong.config.settings import WINDOW_HEIGHT, WINDOW_TITLE, WINDOW_WIDTH
-from src.erchong.widgets import HomeWidget, SettingsWidget
+from src.erchong.widgets import HomeWidget, SettingsWidget, WindowFeatureCaptureWidget
 from src.erchong.common.config import cfg
 
 from src.erchong.utils.logger import get_logger
@@ -41,9 +41,11 @@ class MainWindow(MSFluentWindow):
         self.homeInterface = HomeWidget("Home Interface", self)
         self.annotationInterface = AnnotationWidget("annotation Interface", self)
         self.settingsInterface = SettingsWidget("Setting Interface", self)
+        self.featureCaptureInterface = WindowFeatureCaptureWidget("teatureCapture Interface", self)
 
         self.addSubInterface(self.homeInterface, FIF.HOME, "主页", FIF.HOME_FILL)
         self.addSubInterface(self.annotationInterface, FIF.TAG, "图片标注")
+        self.addSubInterface(self.featureCaptureInterface, FIF.PAUSE, "特征捕获")
 
         self.navigationInterface.addItem(
             routeKey="theme",
