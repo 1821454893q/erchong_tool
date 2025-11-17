@@ -12,6 +12,7 @@ class StyleSheet(StyleSheetBase, Enum):
     HWND_LIST_WIDGET = "hwnd_list_widget"
     IMAGE_CARD_WIDGET = "image_card_widget"
     HOME_WIDGET = "home_widget"
+    ANNOTATION_WIDGET = "annotation_widget"
 
     def path(self, theme=Theme.AUTO):
         theme = qconfig.theme if theme == Theme.AUTO else theme

@@ -12,8 +12,9 @@ from qfluentwidgets import (
 )
 from qfluentwidgets import FluentIcon as FIF, SystemThemeListener
 
-from ..config.settings import WINDOW_HEIGHT, WINDOW_TITLE, WINDOW_WIDTH
-from ..widgets import HomeWidget, SettingsWidget
+from erchong.widgets.annotation_widget import AnnotationWidget
+from src.erchong.config.settings import WINDOW_HEIGHT, WINDOW_TITLE, WINDOW_WIDTH
+from src.erchong.widgets import HomeWidget, SettingsWidget
 
 from src.erchong.utils.logger import get_logger
 
@@ -37,9 +38,11 @@ class MainWindow(MSFluentWindow):
         """初始化导航"""
         # 创建子界面
         self.homeInterface = HomeWidget("Home Interface", self)
+        self.annotationInterface = AnnotationWidget("annotation Interface", self)
         self.settingsInterface = SettingsWidget("Setting Interface", self)
 
         self.addSubInterface(self.homeInterface, FIF.HOME, "主页", FIF.HOME_FILL)
+        self.addSubInterface(self.annotationInterface, FIF.TAG, "图片标注")
 
         self.navigationInterface.addItem(
             routeKey="theme",

@@ -33,3 +33,4 @@ Thumbs.db
 !resource/**/*.jpg
 
 .github
+resource/screenshot
