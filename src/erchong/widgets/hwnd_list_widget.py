@@ -7,12 +7,15 @@ import PyQt5.QtGui as qtg
 from gas.util.hwnd_util import WindowInfo, list_all_windows
 from src.erchong.utils.logger import get_logger
 from src.erchong.widgets.image_card_widget import ImageCardWidget
+from src.erchong.common.config import cfg
 
 log = get_logger()
 
 
 class HwndListWidget(qfr.FramelessWindow):
     """窗口句柄列表窗口"""
+
+    cfgUpdated = qtc.pyqtSignal()  # 配置更新信号
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -82,6 +85,7 @@ class HwndListWidget(qfr.FramelessWindow):
                 qf.Action(
                     "复制 类名", self, triggered=lambda: qtw.QApplication.clipboard().setText(node.class_name or "")
                 ),
+                qf.Action("保存默认配置", self, triggered=self._cfg_save(node)),
             ]
         )
         # 添加分割线
@@ -90,6 +94,15 @@ class HwndListWidget(qfr.FramelessWindow):
         menu.addAction(qf.Action("打开测试截图", self, triggered=self._on_test_screenshot_clicked(node)))
 
         menu.exec(self.tree_view.viewport().mapToGlobal(position))
+
+    def _cfg_save(self, node: WindowInfo):
+        def handle():
+            cfg.set(cfg.hwndWindowsTitle, node.title)
+            cfg.set(cfg.hwndClassname, node.class_name)
+            qf.InfoBar.success(title="设置成功", content="", parent=self, position=qf.InfoBarPosition.TOP)
+            self.cfgUpdated.emit()
+
+        return handle
 
     def _on_search_clicked(self):
         filter_text = self.search_edit.text().strip().lower()

@@ -15,6 +15,7 @@ from qfluentwidgets import FluentIcon as FIF, SystemThemeListener
 from erchong.widgets.annotation_widget import AnnotationWidget
 from src.erchong.config.settings import WINDOW_HEIGHT, WINDOW_TITLE, WINDOW_WIDTH
 from src.erchong.widgets import HomeWidget, SettingsWidget
+from src.erchong.common.config import cfg
 
 from src.erchong.utils.logger import get_logger
 
@@ -75,9 +76,9 @@ class MainWindow(MSFluentWindow):
     def switchTheme(self):
         """切换主题"""
         if isDarkTheme():
-            setTheme(Theme.LIGHT)
+            setTheme(Theme.LIGHT, True)
         else:
-            setTheme(Theme.DARK)
+            setTheme(Theme.DARK, True)
 
     def closeEvent(self, e):
         log.debug("closeEvent")

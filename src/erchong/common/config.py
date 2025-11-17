@@ -26,21 +26,23 @@ class LanguageSerializer(qf.ConfigSerializer):
 
 
 class Config(qf.QConfig):
-    # main window
-    enableAcrylicBackground = qf.ConfigItem("MainWindow", "EnableAcrylicBackground", False, qf.BoolValidator())
-    minimizeToTray = qf.ConfigItem("MainWindow", "MinimizeToTray", True, qf.BoolValidator())
-    playBarColor = qf.ColorConfigItem("MainWindow", "PlayBarColor", "#225C7F")
-    recentPlaysNumber = qf.RangeConfigItem("MainWindow", "RecentPlayNumbers", 300, qf.RangeValidator(10, 300))
-    dpiScale = qf.OptionsConfigItem(
-        "MainWindow", "DpiScale", "Auto", qf.OptionsValidator([1, 1.25, 1.5, 1.75, 2, "Auto"]), restart=True
-    )
-    language = qf.OptionsConfigItem(
-        "MainWindow", "Language", Language.AUTO, qf.OptionsValidator(Language), LanguageSerializer(), restart=True
-    )
+    # main windows
+    # main_windows_theme = qf.ConfigItem(
+    #     group="MainWindow",
+    #     name="Theme",
+    #     default=Theme.Light,
+    #     validator=qf.OptionsValidator([Theme.Light, Theme.Dark, Theme.Auto]),
+    #     serializer=qf.EnumSerializer(qf.Theme),
+    #     restart=False,
+    # )
+
+    # home interface
+    hwndWindowsTitle = qf.ConfigItem(group="HomeInterface", name="hwndWindowsTitle", default="")
+    hwndClassname = qf.ConfigItem(group="HomeInterface", name="hwndClassname", default="")
 
 
 cfg = Config()
-qf.qconfig.load(str(RESOURCE_DIR / "qt/config.json"), cfg)
+qf.qconfig.load(str(RESOURCE_DIR / "config_params.json"), cfg)
 
 
 def create_app_icon():

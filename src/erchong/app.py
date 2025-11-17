@@ -8,14 +8,13 @@ from PyQt5.QtWidgets import QApplication
 from qfluentwidgets import Theme, setTheme
 
 from .windows import MainWindow
+from src.erchong.common.config import cfg
 
 
 def create_app() -> QApplication:
     """创建并配置应用"""
     # 设置高DPI缩放策略
-    QApplication.setHighDpiScaleFactorRoundingPolicy(
-        Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
-    )
+    QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     QApplication.setAttribute(Qt.ApplicationAttribute.AA_EnableHighDpiScaling)
     QApplication.setAttribute(Qt.ApplicationAttribute.AA_UseHighDpiPixmaps)
 
@@ -23,8 +22,7 @@ def create_app() -> QApplication:
     app = QApplication(sys.argv)
 
     # 设置主题
-    setTheme(Theme.LIGHT)
-
+    setTheme(cfg.get(cfg.themeMode))
     return app
 
 

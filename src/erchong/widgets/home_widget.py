@@ -26,6 +26,7 @@ from qfluentwidgets import (
     SmoothScrollArea,
     isDarkTheme,
     SingleDirectionScrollArea,
+    LineEdit,
 )
 
 from src.erchong.config.settings import RESOURCE_DIR
@@ -33,6 +34,7 @@ from src.erchong.utils.platform import is_win11
 from src.erchong.widgets.image_card_widget import ImageCardWidget
 from src.erchong.widgets.hwnd_list_widget import HwndListWidget
 from src.erchong.common.style_sheet import StyleSheet
+from src.erchong.common.config import cfg
 
 
 class HomeWidget(SingleDirectionScrollArea):
@@ -67,8 +69,25 @@ class HomeWidget(SingleDirectionScrollArea):
         self.set_group_card.setBorderRadius(8)
 
         self.capture_btn = PrimaryPushButton("测试")
+        self.capture_btn.setFixedWidth(100)
         self.set_group_card.addGroup(
             icon=FluentIcon.ERASE_TOOL, title="测试截图", content="用于测试截图功能是否正常", widget=self.capture_btn
+        )
+
+        self.hwnd_title_edit = LineEdit()
+        self.hwnd_title_edit.setText(cfg.get(cfg.hwndWindowsTitle))
+        self.hwnd_title_edit.setFixedWidth(300)
+        self.set_group_card.addGroup(
+            icon=FluentIcon.FONT, title="窗口标题", content="用于获取句柄的窗口标题", widget=self.hwnd_title_edit
+        )
+        self.hwnd_classname_edit = LineEdit()
+        self.hwnd_classname_edit.setText(cfg.get(cfg.hwndClassname))
+        self.hwnd_classname_edit.setFixedWidth(300)
+        self.set_group_card.addGroup(
+            icon=FluentIcon.DICTIONARY,
+            title="窗口类名",
+            content="用于获取句柄的窗口类名",
+            widget=self.hwnd_classname_edit,
         )
 
         self.run_group_card = GroupHeaderCardWidget()
@@ -76,13 +95,6 @@ class HomeWidget(SingleDirectionScrollArea):
         self.run_group_card.setBorderRadius(8)
 
         self.run_btn = PrimaryPushButton("开始")
-        self.run_group_card.addGroup(icon=FluentIcon.ERASE_TOOL, title="脚本1", content="测试开发", widget=self.run_btn)
-        self.run_group_card.addGroup(icon=FluentIcon.ERASE_TOOL, title="脚本1", content="测试开发", widget=self.run_btn)
-        self.run_group_card.addGroup(icon=FluentIcon.ERASE_TOOL, title="脚本1", content="测试开发", widget=self.run_btn)
-        self.run_group_card.addGroup(icon=FluentIcon.ERASE_TOOL, title="脚本1", content="测试开发", widget=self.run_btn)
-        self.run_group_card.addGroup(icon=FluentIcon.ERASE_TOOL, title="脚本1", content="测试开发", widget=self.run_btn)
-        self.run_group_card.addGroup(icon=FluentIcon.ERASE_TOOL, title="脚本1", content="测试开发", widget=self.run_btn)
-        self.run_group_card.addGroup(icon=FluentIcon.ERASE_TOOL, title="脚本1", content="测试开发", widget=self.run_btn)
         self.run_group_card.addGroup(icon=FluentIcon.ERASE_TOOL, title="脚本1", content="测试开发", widget=self.run_btn)
         self.run_group_card.addGroup(icon=FluentIcon.ERASE_TOOL, title="脚本1", content="测试开发", widget=self.run_btn)
 
@@ -99,7 +111,16 @@ class HomeWidget(SingleDirectionScrollArea):
 
     def _set_connections(self):
         self.capture_btn.clicked.connect(self.openHwnd)
+        self.hwnd_title_edit.textChanged.connect(lambda: cfg.set(cfg.hwndWindowsTitle, self.hwnd_title_edit.text()))
+        self.hwnd_classname_edit.textChanged.connect(
+            lambda: cfg.set(cfg.hwndClassname, self.hwnd_classname_edit.text())
+        )
+
+    def toggle_udpate_cfg(self):
+        self.hwnd_classname_edit.setText(cfg.get(cfg.hwndClassname))
+        self.hwnd_title_edit.setText(cfg.get(cfg.hwndWindowsTitle))
 
     def openHwnd(self):
         widget = HwndListWidget()
         widget.show()
+        widget.cfgUpdated.connect(self.toggle_udpate_cfg)
