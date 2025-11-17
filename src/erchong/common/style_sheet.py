@@ -9,6 +9,7 @@ from erchong.config.settings import QT_QSS_DIR
 class StyleSheet(StyleSheetBase, Enum):
     """Style sheet"""
 
+    DEFUALT = "defualt"
     HWND_LIST_WIDGET = "hwnd_list_widget"
     IMAGE_CARD_WIDGET = "image_card_widget"
     HOME_WIDGET = "home_widget"
