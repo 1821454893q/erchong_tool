@@ -1125,9 +1125,6 @@ class WindowFeatureCaptureWidget(QWidget):
             return
 
         try:
-            # 默认路径
-            default_dir = Path(RESOURCE_DIR) / "features"
-            default_dir.mkdir(parents=True, exist_ok=True)
 
             # 获取窗口标题作为默认文件名
             window_title = "templates"
@@ -1140,11 +1137,14 @@ class WindowFeatureCaptureWidget(QWidget):
                 if not window_title:
                     window_title = "templates"
 
+            # 默认路径
+            default_dir = Path(RESOURCE_DIR) / "features" / window_title
             file_path, _ = QFileDialog.getSaveFileName(
                 self, "导出模板", str(default_dir / f"{window_title}.json"), "JSON Files (*.json)"
             )
 
             if file_path:
+                Path(file_path).parent.mkdir(parents=True, exist_ok=True)
                 # 准备导出数据
                 export_data = {}
                 for name, template in self.feature_templates.items():

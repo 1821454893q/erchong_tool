@@ -9,8 +9,7 @@ from PyQt5.QtCore import Qt, QEasingCurve, QSize, QRectF
 from PyQt5.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget, QDialog, QLabel
 from PyQt5.QtGui import QPainter, QPainterPath, QLinearGradient, QColor, QBrush
 
-import gas.util.img_util as img_util
-import gas.util.screenshot_util as screenshot_util
+from gas.util.hwnd_util import get_hwnd_by_class_and_title, WindowInfo, get_window_wh
 from qfluentwidgets import (
     BodyLabel,
     ComboBox,
@@ -27,6 +26,7 @@ from qfluentwidgets import (
     isDarkTheme,
     SingleDirectionScrollArea,
     LineEdit,
+    InfoBar,
 )
 
 from src.erchong.config.settings import RESOURCE_DIR
@@ -68,10 +68,22 @@ class HomeWidget(SingleDirectionScrollArea):
         self.set_group_card.setTitle("基本设置")
         self.set_group_card.setBorderRadius(8)
 
-        self.capture_btn = PrimaryPushButton("测试")
+        self.find_hwnd_btn = PrimaryPushButton("运行")
+        self.find_hwnd_btn.setFixedWidth(100)
+        self.set_group_card.addGroup(
+            icon=FluentIcon.ERASE_TOOL,
+            title="句柄管理",
+            content="用于获取句柄.测试截取等功能",
+            widget=self.find_hwnd_btn,
+        )
+
+        self.capture_btn = PrimaryPushButton("运行")
         self.capture_btn.setFixedWidth(100)
         self.set_group_card.addGroup(
-            icon=FluentIcon.ERASE_TOOL, title="测试截图", content="用于测试截图功能是否正常", widget=self.capture_btn
+            icon=FluentIcon.ERASE_TOOL,
+            title="捕获窗口",
+            content="根据下面的窗口标题与类名,捕获窗口",
+            widget=self.capture_btn,
         )
 
         self.hwnd_title_edit = LineEdit()
@@ -80,6 +92,7 @@ class HomeWidget(SingleDirectionScrollArea):
         self.set_group_card.addGroup(
             icon=FluentIcon.FONT, title="窗口标题", content="用于获取句柄的窗口标题", widget=self.hwnd_title_edit
         )
+
         self.hwnd_classname_edit = LineEdit()
         self.hwnd_classname_edit.setText(cfg.get(cfg.hwndClassname))
         self.hwnd_classname_edit.setFixedWidth(300)
@@ -110,17 +123,38 @@ class HomeWidget(SingleDirectionScrollArea):
         self.setWidget(content_widget)
 
     def _set_connections(self):
-        self.capture_btn.clicked.connect(self.openHwnd)
+        self.find_hwnd_btn.clicked.connect(self.openHwnd)
         self.hwnd_title_edit.textChanged.connect(lambda: cfg.set(cfg.hwndWindowsTitle, self.hwnd_title_edit.text()))
         self.hwnd_classname_edit.textChanged.connect(
             lambda: cfg.set(cfg.hwndClassname, self.hwnd_classname_edit.text())
         )
+        self.capture_btn.clicked.connect(self._capture)
 
-    def toggle_udpate_cfg(self):
+    def udpate_cfg(self):
         self.hwnd_classname_edit.setText(cfg.get(cfg.hwndClassname))
         self.hwnd_title_edit.setText(cfg.get(cfg.hwndWindowsTitle))
 
     def openHwnd(self):
         widget = HwndListWidget()
         widget.show()
-        widget.cfgUpdated.connect(self.toggle_udpate_cfg)
+        widget.cfgUpdated.connect(self.udpate_cfg)
+
+    def _capture(self):
+        hwnd_list = get_hwnd_by_class_and_title(
+            class_name=cfg.get(cfg.hwndClassname),
+            titles=cfg.get(cfg.hwndWindowsTitle),
+        )
+        if hwnd_list is None or len(hwnd_list) == 0:
+            InfoBar.warning(title="警告", content="未能找到对应窗口句柄", parent=self, duration=3000)
+            return
+
+        hwnd = hwnd_list[0]
+        win = WindowInfo(
+            hwnd=hwnd,
+            size=get_window_wh(hwnd),
+            title=win32gui.GetWindowText(hwnd),
+            class_name=win32gui.GetClassName(hwnd),
+            position=[0, 0],
+        )
+        widget = ImageCardWidget(windows=win)
+        widget.show()

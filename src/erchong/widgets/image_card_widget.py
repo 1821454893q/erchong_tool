@@ -1,6 +1,8 @@
+from pathlib import Path
 import threading
 import time
 import cv2
+from erchong.config.settings import RESOURCE_DIR
 from src.erchong.common.style_sheet import StyleSheet
 from enum import IntEnum
 
@@ -12,6 +14,7 @@ import PyQt5.QtGui as qtg
 
 from gas.util.hwnd_util import WindowInfo
 from gas.util.screenshot_util import screenshot, screenshot_bitblt
+from gas.util.img_util import save_img
 
 from src.erchong.utils.logger import get_logger
 
@@ -37,6 +40,7 @@ class ImageCardWidget(qfr.FramelessWindow):
 
         # 添加暂停状态控制
         self.is_paused = False
+        self.is_save = False
 
         self._setup_ui()
         self._set_connections()
@@ -64,11 +68,17 @@ class ImageCardWidget(qfr.FramelessWindow):
 
         # 暂停/继续按钮
         self.pause_button = qf.PushButton("暂停", self)
+        self.pause_button.setFixedWidth(100)
+
+        # 获取图像 以供标注训练
+        self.capture_btn = qf.PushButton("开始保存图像", self)
+        self.capture_btn.setFixedWidth(100)
 
         first_row_layout.addWidget(self.mode_label)
         first_row_layout.addWidget(self.screenshot_mode_combo)
         first_row_layout.addStretch(1)  # 添加弹性空间
         first_row_layout.addWidget(self.pause_button)
+        first_row_layout.addWidget(self.capture_btn)
 
         # 第二行：状态标签
         self.status_label = qf.BodyLabel(self)
@@ -87,6 +97,7 @@ class ImageCardWidget(qfr.FramelessWindow):
 
     def _set_connections(self):
         self.pause_button.clicked.connect(self.toggle_pause)
+        self.capture_btn.clicked.connect(self.toggle_save)
 
     def toggle_pause(self):
         """切换暂停/继续状态"""
@@ -95,6 +106,14 @@ class ImageCardWidget(qfr.FramelessWindow):
             self.pause_button.setText("继续")
         else:
             self.pause_button.setText("暂停")
+
+    def toggle_save(self):
+        """切换暂停/继续状态"""
+        self.is_save = not self.is_save
+        if self.is_save:
+            self.capture_btn.setText("停止保存图像")
+        else:
+            self.capture_btn.setText("开始保存图像")
 
     def update_frame(self):
         """更新image_label帧"""
@@ -130,6 +149,22 @@ class ImageCardWidget(qfr.FramelessWindow):
                 self.current_fps = self.frame_count / (time_elapsed / 1000.0)
                 self.frame_count = 0
                 self.last_fps_time = old_time
+
+                if self.is_save:
+                    # 保存图像
+                    window_title = "".join(
+                        c for c in self.windows.title if c.isalnum() or c in (" ", "-", "_")
+                    ).rstrip()
+                    if not window_title:
+                        window_title = "templates"
+
+                    try:
+                        img_name = f"{self.windows.title}_{int(time.time())}.png"
+                        save_path = Path(RESOURCE_DIR) / "screenshot" / window_title
+                        save_path.mkdir(parents=True, exist_ok=True)
+                        save_img(scr, save_path / img_name)
+                    except Exception as e:
+                        log.error(e)
 
             # 使用换行符替换 | 符号
             status_text = f"HWND: {self.windows.hwnd} | Title: {self.windows.title} | Capture method: {combo_data} | FPS: {self.current_fps:.1f}"
