@@ -27,14 +27,12 @@ class LanguageSerializer(qf.ConfigSerializer):
 
 class Config(qf.QConfig):
     # main windows
-    # main_windows_theme = qf.ConfigItem(
-    #     group="MainWindow",
-    #     name="Theme",
-    #     default=Theme.Light,
-    #     validator=qf.OptionsValidator([Theme.Light, Theme.Dark, Theme.Auto]),
-    #     serializer=qf.EnumSerializer(qf.Theme),
-    #     restart=False,
-    # )
+    main_windows_position = qf.ConfigItem(
+        group="MainWindow",
+        name="position",
+        default=[0, 0, 1200, 800],
+        restart=False,
+    )
 
     # home interface
     hwndWindowsTitle = qf.ConfigItem(group="HomeInterface", name="hwndWindowsTitle", default="")

@@ -9,6 +9,7 @@ dependencies = [
     "pyqt5_sip==12.17.1",
     "pyqt-fluent-widgets==1.9.2",
     "gas",
+    "opencv-python>=4.12.0.88",
 ]
 
 [project.scripts]
@@ -25,4 +26,4 @@ required-environments = [
 ]
 
 [tool.uv.sources]
-gas = { git = "https://github.com/1821454893q/game_ocr_script.git", rev = "v0.0.3" }
+gas = { git = "https://github.com/1821454893q/game_ocr_script.git", rev = "v0.0.4" }

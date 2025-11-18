@@ -170,5 +170,5 @@ class ImageCardWidget(qfr.FramelessWindow):
             return qtg.QPixmap.fromImage(q_image)
 
         except Exception as e:
-            print(f"图像转换失败: {e}")
+            log.error(f"图像转换失败: {e}")
             return None

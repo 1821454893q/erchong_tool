@@ -67,13 +67,20 @@ class MainWindow(MSFluentWindow):
 
     def initWindow(self):
         """初始化窗口"""
-        self.resize(WINDOW_WIDTH, WINDOW_HEIGHT)
+        [x, y, width, height] = cfg.get(cfg.main_windows_position)
         self.setWindowIcon(QIcon(":/qfluentwidgets/images/logo.png"))
         self.setWindowTitle(WINDOW_TITLE)
 
         desktop = QApplication.desktop().availableGeometry()
-        w, h = desktop.width(), desktop.height()
-        self.move(w // 2 - self.width() // 2, h // 2 - self.height() // 2)
+        if x == 0 and y == 0:
+            self.resize(WINDOW_WIDTH, WINDOW_HEIGHT)
+            w, h = desktop.width(), desktop.height()
+            x2, y2 = w // 2 - self.width() // 2, h // 2 - self.height() // 2
+            self.move(x2, y2)
+            cfg.set(cfg.main_windows_position, [x2, y2, WINDOW_WIDTH, WINDOW_HEIGHT])
+        else:
+            self.resize(width, height)
+            self.move(x, y)
 
     def switchTheme(self):
         """切换主题"""

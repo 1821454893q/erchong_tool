@@ -6,10 +6,18 @@
             "PingFang SC"
         ],
         "ThemeColor": "#ff009faa",
-        "ThemeMode": "Dark"
+        "ThemeMode": "Light"
     },
     "HomeInterface": {
         "hwndClassname": "Qt5156QWindowIcon",
         "hwndWindowsTitle": "MuMuNxDevice"
+    },
+    "MainWindow": {
+        "position": [
+            560,
+            220,
+            800,
+            600
+        ]
     }
 }
