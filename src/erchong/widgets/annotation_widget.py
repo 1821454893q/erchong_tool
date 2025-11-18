@@ -566,6 +566,20 @@ class AnnotationWidget(QWidget):
         if folder:
             self.dataset_path = Path(folder)
             self.dataset_path_label.setText(str(self.dataset_path))
+            # 加载类别
+            classes_path = Path(folder) / "classes.txt"
+            if classes_path.exists():
+                with open(classes_path, "r", encoding="utf-8") as f:
+                    lines = f.readlines()
+                    if lines is None or len(lines) == 0:
+                        return
+                    lines = [s.strip() for s in lines]
+                    log.debug(f"加载类别 {lines}")
+                    self.class_list.clear()
+                    self.classes.clear()
+                    for line in lines:
+                        self.classes.append(line)
+                        self.class_list.addItem(line)
 
             self.load_dataset_btn.setEnabled(False)
             self.load_dataset_btn.setText("加载中...")
