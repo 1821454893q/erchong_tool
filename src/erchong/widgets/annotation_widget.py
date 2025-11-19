@@ -1,8 +1,10 @@
 """图片标注工具组件 - 修复图片切换问题"""
 
+import datetime
 import os
 import json
 from pathlib import Path
+import shutil
 from PyQt5.QtCore import Qt, QPoint, QRect, pyqtSignal
 from PyQt5.QtGui import QPixmap, QPainter, QPen, QColor, QMouseEvent
 from PyQt5.QtWidgets import (
@@ -18,6 +20,7 @@ from PyQt5.QtWidgets import (
     QListWidgetItem,
     QSplitter,
     QApplication,
+    QDialog,
 )
 
 from qfluentwidgets import (
@@ -202,6 +205,9 @@ class AnnotationCanvas(QLabel):
 
     def _original_to_display_coords(self, original_point):
         """原始图片坐标转换为显示坐标"""
+        if not self.current_pixmap or not self.original_pixmap:
+            return original_point
+
         # 应用缩放因子，然后加上图片偏移量
         x = (original_point.x() / self.scale_factor) + self.image_offset.x()
         y = (original_point.y() / self.scale_factor) + self.image_offset.y()
@@ -516,6 +522,9 @@ class AnnotationWidget(QWidget):
         self.export_btn = PrimaryPushButton("导出 YOLO 格式")
         export_layout.addWidget(self.export_btn)
 
+        self.advanced_organize_btn = PushButton("高级整理选项")
+        export_layout.addWidget(self.advanced_organize_btn)
+
         right_layout.addWidget(export_group)
 
         right_layout.addStretch()
@@ -535,6 +544,7 @@ class AnnotationWidget(QWidget):
         self.add_class_btn.clicked.connect(self._add_class)
         self.export_btn.clicked.connect(self._export_yolo)
         self.apply_size_btn.clicked.connect(self._apply_canvas_size)
+        self.advanced_organize_btn.clicked.connect(self._organize_dataset)
 
         # 画布信号
         self.canvas.bboxDrawn.connect(self._on_bbox_drawn)
@@ -639,7 +649,8 @@ class AnnotationWidget(QWidget):
 
         # 加载图片
         if self.canvas.load_image(image_path):
-            # 加载已有的标注文件
+            # 等待图片完全加载后再加载标注
+            QApplication.processEvents()
             self._load_existing_annotations()
         else:
             InfoBar.error(title="错误", content=f"无法加载图片: {image_path.name}", parent=self)
@@ -658,6 +669,10 @@ class AnnotationWidget(QWidget):
         self.canvas.clear_annotations()
         self.annotation_list.clear()
 
+        # 等待画布完全准备好
+        if not self.canvas.original_pixmap:
+            return
+
         # 查找对应的 YOLO 标注文件
         txt_path = self.current_image_path.with_suffix(".txt")
         if txt_path.exists():
@@ -673,25 +688,36 @@ class AnnotationWidget(QWidget):
                             x_center, y_center, width, height = map(float, parts[1:])
 
                             # 转换为像素坐标
-                            if self.canvas.original_pixmap:
-                                img_w = self.canvas.original_pixmap.width()
-                                img_h = self.canvas.original_pixmap.height()
+                            img_w = self.canvas.original_pixmap.width()
+                            img_h = self.canvas.original_pixmap.height()
 
-                                x1 = int((x_center - width / 2) * img_w)
-                                y1 = int((y_center - height / 2) * img_h)
-                                x2 = int((x_center + width / 2) * img_w)
-                                y2 = int((y_center + height / 2) * img_h)
+                            # 确保坐标在有效范围内
+                            x_center = max(0, min(x_center, 1.0))
+                            y_center = max(0, min(y_center, 1.0))
+                            width = max(0, min(width, 1.0))
+                            height = max(0, min(height, 1.0))
 
-                                class_name = (
-                                    self.classes[class_id] if class_id < len(self.classes) else f"class_{class_id}"
-                                )
-                                bbox = [x1, y1, x2, y2, class_name]
-                                self.canvas.annotations.append(bbox)
-                                self.annotation_list.addItem(f"{class_name}: [{x1}, {y1}, {x2}, {y2}]")
-                                annotation_count += 1
+                            x1 = int((x_center - width / 2) * img_w)
+                            y1 = int((y_center - height / 2) * img_h)
+                            x2 = int((x_center + width / 2) * img_w)
+                            y2 = int((y_center + height / 2) * img_h)
+
+                            # 确保坐标不超出图片边界
+                            x1 = max(0, min(x1, img_w - 1))
+                            y1 = max(0, min(y1, img_h - 1))
+                            x2 = max(0, min(x2, img_w - 1))
+                            y2 = max(0, min(y2, img_h - 1))
+
+                            class_name = self.classes[class_id] if class_id < len(self.classes) else f"class_{class_id}"
+                            bbox = [x1, y1, x2, y2, class_name]
+                            self.canvas.annotations.append(bbox)
+                            self.annotation_list.addItem(f"{class_name}: [{x1}, {y1}, {x2}, {y2}]")
+                            annotation_count += 1
 
                 if annotation_count > 0:
-                    InfoBar.info(title="信息", content=f"已加载 {annotation_count} 个标注", parent=self)
+                    # 强制更新画布显示
+                    self.canvas.update()
+                    log.info(f"已加载 {annotation_count} 个标注")
 
             except Exception as e:
                 log.error(f"加载标注文件失败: {e}")
@@ -794,3 +820,268 @@ class AnnotationWidget(QWidget):
             log.error(f"保存类别文件失败: {e}")
 
         InfoBar.success(title="导出成功", content=f"已导出 {total_annotations} 个标注到 YOLO 格式", parent=self)
+
+    def _organize_dataset(self):
+        """整理数据集"""
+        if not hasattr(self, "dataset_path"):
+            InfoBar.warning(title="警告", content="请先加载数据集", parent=self)
+            return
+
+        # 显示配置对话框
+        dialog = self._setup_organize_dialog()
+        if dialog.exec_() != QDialog.Accepted:
+            return
+
+        # 选择输出目录
+        output_dir = QFileDialog.getExistingDirectory(
+            self, "选择输出目录", str(self.dataset_path.parent), options=QFileDialog.ShowDirsOnly
+        )
+
+        if output_dir:
+            # 执行整理
+            success = self.organize_yolo_dataset(
+                output_dir=output_dir,
+                train_ratio=self.train_ratio_spin.value(),
+                cleanup_existing=self.cleanup_check.isChecked(),
+                filter_annotated=self.filter_check.isChecked(),
+            )
+
+    def organize_yolo_dataset(self, output_dir, train_ratio=0.8, cleanup_existing=True, filter_annotated=True):
+        """整理为 YOLO 训练集格式 - 增强版本
+
+        Args:
+            output_dir: 输出目录
+            train_ratio: 训练集比例
+            cleanup_existing: 是否清理已存在的输出目录
+            filter_annotated: 是否只筛选有标注的图片
+        """
+        if not hasattr(self, "dataset_path"):
+            InfoBar.warning(title="警告", content="请先加载数据集", parent=self)
+            return False
+
+        output_path = Path(output_dir)
+
+        # 清理已存在的输出目录
+        if cleanup_existing and output_path.exists():
+            try:
+                shutil.rmtree(output_path)
+                log.info(f"已清理现有目录: {output_path}")
+            except Exception as e:
+                log.error(f"清理目录失败: {e}")
+                InfoBar.error(title="错误", content=f"清理目录失败: {e}", parent=self)
+                return False
+
+        # 创建标准 YOLO 目录结构
+        directories = ["images/train", "images/val", "labels/train", "labels/val"]
+
+        for directory in directories:
+            (output_path / directory).mkdir(parents=True, exist_ok=True)
+
+        # 筛选有标注的图片
+        annotated_images = []
+        for image_path in self.image_files:
+            txt_path = image_path.with_suffix(".txt")
+
+            if filter_annotated:
+                # 只选择有标注文件的图片
+                if txt_path.exists() and txt_path.stat().st_size > 0:
+                    annotated_images.append(image_path)
+            else:
+                # 包含所有图片
+                annotated_images.append(image_path)
+
+        if not annotated_images:
+            InfoBar.warning(
+                title="警告", content="未找到有标注的图片" if filter_annotated else "未找到图片", parent=self
+            )
+            return False
+
+        # 按文件名排序确保一致性
+        annotated_images.sort(key=lambda x: x.name.lower())
+
+        # 分割训练集和验证集
+        total_count = len(annotated_images)
+        train_count = int(total_count * train_ratio)
+
+        train_images = annotated_images[:train_count]
+        val_images = annotated_images[train_count:]
+
+        success_count = 0
+        failed_count = 0
+
+        # 处理训练集
+        for image_path in train_images:
+            if self._copy_image_and_label(image_path, output_path, "train"):
+                success_count += 1
+            else:
+                failed_count += 1
+
+        # 处理验证集
+        for image_path in val_images:
+            if self._copy_image_and_label(image_path, output_path, "val"):
+                success_count += 1
+            else:
+                failed_count += 1
+
+        # 创建 dataset.yaml 配置文件
+        self._create_yolo_config(output_path, output_path.name)
+
+        # 创建类别文件
+        self._create_classes_file(output_path)
+
+        # 生成数据集统计信息
+        stats = self._generate_dataset_stats(output_path, len(train_images), len(val_images))
+
+        # 显示结果
+        if failed_count == 0:
+            InfoBar.success(
+                title="整理完成",
+                content=f"成功整理 {success_count} 个样本 ({len(train_images)}训练/{len(val_images)}验证)\n{stats}",
+                parent=self,
+            )
+        else:
+            InfoBar.warning(
+                title="部分完成", content=f"成功: {success_count}, 失败: {failed_count}\n{stats}", parent=self
+            )
+
+        return failed_count == 0
+
+    def _copy_image_and_label(self, image_path, output_path, split):
+        """复制图片和标注文件到指定分割集"""
+        try:
+            # 复制图片文件
+            image_dest = output_path / "images" / split / image_path.name
+            shutil.copy2(image_path, image_dest)
+
+            # 复制对应的标注文件
+            txt_src = image_path.with_suffix(".txt")
+            if txt_src.exists() and txt_src.stat().st_size > 0:
+                txt_dest = output_path / "labels" / split / txt_src.name
+                shutil.copy2(txt_src, txt_dest)
+            else:
+                # 如果没有标注文件，创建一个空的
+                txt_dest = output_path / "labels" / split / txt_src.name
+                txt_dest.touch()
+
+            return True
+
+        except Exception as e:
+            log.error(f"复制文件失败 {image_path}: {e}")
+            return False
+
+    def _create_classes_file(self, output_path):
+        """创建类别文件"""
+        classes_file = output_path / "classes.txt"
+        try:
+            with open(classes_file, "w", encoding="utf-8") as f:
+                for class_name in self.classes:
+                    f.write(f"{class_name}\n")
+            log.info(f"已创建类别文件: {classes_file}")
+        except Exception as e:
+            log.error(f"创建类别文件失败: {e}")
+
+    def _generate_dataset_stats(self, dataset_path, train_count, val_count):
+        """生成数据集统计信息"""
+        total_count = train_count + val_count
+        train_annotations = 0
+        val_annotations = 0
+
+        # 统计训练集标注数量
+        train_labels_dir = dataset_path / "labels" / "train"
+        if train_labels_dir.exists():
+            for txt_file in train_labels_dir.glob("*.txt"):
+                if txt_file.stat().st_size > 0:
+                    train_annotations += 1
+
+        # 统计验证集标注数量
+        val_labels_dir = dataset_path / "labels" / "val"
+        if val_labels_dir.exists():
+            for txt_file in val_labels_dir.glob("*.txt"):
+                if txt_file.stat().st_size > 0:
+                    val_annotations += 1
+
+        stats = f"""
+    数据集统计:
+    - 总样本数: {total_count}
+    - 训练集: {train_count} (有标注: {train_annotations})
+    - 验证集: {val_count} (有标注: {val_annotations})
+    - 类别数: {len(self.classes)}
+    - 标注率: {(train_annotations + val_annotations) / total_count * 100:.1f}%
+    """
+        return stats
+
+    def _create_yolo_config(self, output_path, dataset_name):
+        """创建 YOLO 数据集配置文件"""
+        # 获取绝对路径
+        abs_path = output_path.absolute()
+
+        config_content = f"""# YOLO 数据集配置文件
+    # 数据集路径
+    path: {abs_path}  # 数据集根目录
+    train: images/train  # 训练图片目录
+    val: images/val      # 验证图片目录
+    test:                # 测试集目录（可选）
+
+    # 类别数量
+    nc: {len(self.classes)}
+
+    # 类别名称
+    names: {self.classes}
+
+    # 数据集信息
+    # 生成时间: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+    # 总类别: {len(self.classes)}
+    # 类别列表: {', '.join(self.classes)}
+    """
+
+        config_file = output_path / f"{dataset_name}.yaml"
+        try:
+            with open(config_file, "w", encoding="utf-8") as f:
+                f.write(config_content)
+            log.info(f"已创建配置文件: {config_file}")
+        except Exception as e:
+            log.error(f"创建配置文件失败: {e}")
+
+    def _setup_organize_dialog(self):
+        """创建数据集整理配置对话框"""
+        from PyQt5.QtWidgets import QDialog, QDialogButtonBox, QFormLayout
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("YOLO 数据集配置")
+        dialog.setMinimumWidth(400)
+
+        layout = QFormLayout(dialog)
+
+        # 训练集比例
+        self.train_ratio_spin = DoubleSpinBox()
+        self.train_ratio_spin.setRange(0.1, 0.9)
+        self.train_ratio_spin.setValue(0.8)
+        self.train_ratio_spin.setSingleStep(0.1)
+        layout.addRow("训练集比例:", self.train_ratio_spin)
+
+        # 清理选项
+        self.cleanup_check = CheckBox("清理已存在的输出目录")
+        self.cleanup_check.setChecked(True)
+        layout.addRow(self.cleanup_check)
+
+        # 筛选选项
+        self.filter_check = CheckBox("只导出有标注的图片")
+        self.filter_check.setChecked(True)
+        layout.addRow(self.filter_check)
+
+        # 统计信息
+        total_images = len(self.image_files)
+        annotated_images = len([img for img in self.image_files if img.with_suffix(".txt").exists()])
+
+        stats_label = CaptionLabel(
+            f"当前数据集: {total_images} 张图片, {annotated_images} 张有标注 ({annotated_images/total_images*100:.1f}%)"
+        )
+        layout.addRow("统计:", stats_label)
+
+        # 按钮
+        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        button_box.accepted.connect(dialog.accept)
+        button_box.rejected.connect(dialog.reject)
+        layout.addRow(button_box)
+
+        return dialog
