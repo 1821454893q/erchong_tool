@@ -46,8 +46,9 @@ from qfluentwidgets import (
 )
 
 from src.erchong.common.style_sheet import StyleSheet
-from src.erchong.config.settings import PROJECT_ROOT
+from src.erchong.config.settings import PROJECT_ROOT, MODULES_DIR
 from src.erchong.utils.logger import get_logger
+from gas.util.onnx_util import YOLOONNXDetector
 
 log = get_logger()
 
@@ -451,12 +452,14 @@ class AnnotationWidget(QWidget):
         control_layout = QHBoxLayout()
         self.prev_btn = PushButton("上一张")
         self.next_btn = PushButton("下一张")
-        self.clear_btn = PushButton("清空标注")
+        self.datect_btn = PushButton("模型检测")
         self.undo_btn = PushButton("撤销")
+        self.clear_btn = PushButton("清空标注")
 
         control_layout.addWidget(self.prev_btn)
         control_layout.addWidget(self.next_btn)
         control_layout.addStretch()
+        control_layout.addWidget(self.datect_btn)
         control_layout.addWidget(self.undo_btn)
         control_layout.addWidget(self.clear_btn)
 
@@ -540,6 +543,7 @@ class AnnotationWidget(QWidget):
         self.prev_btn.clicked.connect(self._prev_image)
         self.next_btn.clicked.connect(self._next_image)
         self.clear_btn.clicked.connect(self._clear_annotations)
+        self.datect_btn.clicked.connect(self._datect_annotations)
         self.undo_btn.clicked.connect(self._undo_annotation)
         self.add_class_btn.clicked.connect(self._add_class)
         self.export_btn.clicked.connect(self._export_yolo)
@@ -660,7 +664,7 @@ class AnnotationWidget(QWidget):
         # 可以在这里添加图片加载完成后的额外处理
         pass
 
-    def _load_existing_annotations(self):
+    def _load_existing_annotations(self, annotations: list[str] = None):
         """加载已有的标注文件"""
         if not self.current_image_path:
             return
@@ -682,37 +686,8 @@ class AnnotationWidget(QWidget):
                     annotation_count = 0
 
                     for line in lines:
-                        parts = line.strip().split()
-                        if len(parts) == 5:
-                            class_id = int(parts[0])
-                            x_center, y_center, width, height = map(float, parts[1:])
-
-                            # 转换为像素坐标
-                            img_w = self.canvas.original_pixmap.width()
-                            img_h = self.canvas.original_pixmap.height()
-
-                            # 确保坐标在有效范围内
-                            x_center = max(0, min(x_center, 1.0))
-                            y_center = max(0, min(y_center, 1.0))
-                            width = max(0, min(width, 1.0))
-                            height = max(0, min(height, 1.0))
-
-                            x1 = int((x_center - width / 2) * img_w)
-                            y1 = int((y_center - height / 2) * img_h)
-                            x2 = int((x_center + width / 2) * img_w)
-                            y2 = int((y_center + height / 2) * img_h)
-
-                            # 确保坐标不超出图片边界
-                            x1 = max(0, min(x1, img_w - 1))
-                            y1 = max(0, min(y1, img_h - 1))
-                            x2 = max(0, min(x2, img_w - 1))
-                            y2 = max(0, min(y2, img_h - 1))
-
-                            class_name = self.classes[class_id] if class_id < len(self.classes) else f"class_{class_id}"
-                            bbox = [x1, y1, x2, y2, class_name]
-                            self.canvas.annotations.append(bbox)
-                            self.annotation_list.addItem(f"{class_name}: [{x1}, {y1}, {x2}, {y2}]")
-                            annotation_count += 1
+                        self._load_line_annotation(line)
+                        annotation_count += 1
 
                 if annotation_count > 0:
                     # 强制更新画布显示
@@ -721,6 +696,39 @@ class AnnotationWidget(QWidget):
 
             except Exception as e:
                 log.error(f"加载标注文件失败: {e}")
+
+    def _load_line_annotation(self, line: str):
+        """加载一行标注信息"""
+        parts = line.strip().split()
+        if len(parts) == 5:
+            class_id = int(parts[0])
+            x_center, y_center, width, height = map(float, parts[1:])
+
+            # 转换为像素坐标
+            img_w = self.canvas.original_pixmap.width()
+            img_h = self.canvas.original_pixmap.height()
+
+            # 确保坐标在有效范围内
+            x_center = max(0, min(x_center, 1.0))
+            y_center = max(0, min(y_center, 1.0))
+            width = max(0, min(width, 1.0))
+            height = max(0, min(height, 1.0))
+
+            x1 = int((x_center - width / 2) * img_w)
+            y1 = int((y_center - height / 2) * img_h)
+            x2 = int((x_center + width / 2) * img_w)
+            y2 = int((y_center + height / 2) * img_h)
+
+            # 确保坐标不超出图片边界
+            x1 = max(0, min(x1, img_w - 1))
+            y1 = max(0, min(y1, img_h - 1))
+            x2 = max(0, min(x2, img_w - 1))
+            y2 = max(0, min(y2, img_h - 1))
+
+            class_name = self.classes[class_id] if class_id < len(self.classes) else f"class_{class_id}"
+            bbox = [x1, y1, x2, y2, class_name]
+            self.canvas.annotations.append(bbox)
+            self.annotation_list.addItem(f"{class_name}: [{x1}, {y1}, {x2}, {y2}]")
 
     def _prev_image(self):
         """上一张图片"""
@@ -742,6 +750,15 @@ class AnnotationWidget(QWidget):
         """清空所有标注"""
         self.canvas.clear_annotations()
         self.annotation_list.clear()
+
+    def _datect_annotations(self):
+        """使用模型推理 检测标注框"""
+        if not hasattr(self, "onnx"):
+            self.onnx = YOLOONNXDetector(onnx_path=str(MODULES_DIR / "best.onnx"), class_names=self.classes)
+
+        img, results, times = self.onnx.detect_image(str(self.current_image_path))
+        # [{'box': [959, 539, 959, 539], 'confidence': 0.7331731915473938, 'class_id': 5, 'class_name': 'ui_task', 'center': (518728, 18449)}, {'box': [959, 539, 959, 539], 'confidence': 0.35861337184906006, 'class_id': 2, 'class_name': 'ui_lv', 'center': (247909, 322439)}]
+        log.info(results)
 
     def _undo_annotation(self):
         """撤销上一个标注"""

@@ -59,6 +59,19 @@ python main.py
 uv run erchong
 ```
 
+ONNX Runtime 1.23.2 需要 VC++ 2015-2022 Redistributable 14.0+版本
+
+
+```bash
+# 检查系统 VC++ 运行时:
+powershell "Get-ItemProperty HKLM:\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64"
+
+# 安装正确的 VC++ 运行时
+winget install Microsoft.VCRedist.2015+.x64
+```
+
+
+
 ## 开发
 
 项目使用以下技术栈：

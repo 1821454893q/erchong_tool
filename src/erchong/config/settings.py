@@ -20,6 +20,9 @@ PYPROJECT_FILE = PROJECT_ROOT / "pyproject.toml"
 # QAA 文件目录
 QT_QSS_DIR = RESOURCE_DIR / "qss"
 
+# 模型 文件目录
+MODULES_DIR = RESOURCE_DIR / "modules"
+
 # 窗口配置
 WINDOW_WIDTH = 800
 WINDOW_HEIGHT = 600
