@@ -64,7 +64,7 @@ class AnnotationCanvas(QLabel):
         self.setAlignment(Qt.AlignCenter)
         self.setMouseTracking(True)
         self.setStyleSheet("background:#1e1e1e; border: 2px solid #333; border-radius: 6px;")
-        self.setMinimumSize(800, 450)
+        self.setMinimumSize(600, 450)
 
         self.original_pixmap = None
         self.annotations = []  # 归一化标注 [class_id, cx, cy, w, h]
@@ -438,43 +438,63 @@ class AnnotationWidget(QWidget):
         self.canvas = AnnotationCanvas(self)
 
         toolbar = QHBoxLayout()
-        self.prev_btn = PushButton("← 上一张 (A)")
-        self.next_btn = PushButton("下一张 (D) →")
-        self.detect_btn = PushButton("自动检测 (Space)")
+        toolbar.setSpacing(4)  # 减少按钮间距
 
-        # 修改：撤销按钮改为E键，清空按钮保持不变
-        self.undo_btn = PushButton("撤销 (E)")
-        self.clear_btn = PushButton("清空 (Ctrl+Q)")
+        # 导航控制（核心功能）
+        self.prev_btn = PushButton("← 上一张")
+        self.next_btn = PushButton("下一张→")
+        self.prev_btn.setFixedWidth(80)
+        self.next_btn.setFixedWidth(80)
+
+        # 标注工具 - 使用下拉菜单整合
+        self.tools_combo = ComboBox()
+        self.tools_combo.setFixedWidth(120)
+        self.tools_combo.addItems(["标注工具 ▼", "自动检测", "撤销标注", "清空标注"])
+        self.tools_combo.setCurrentIndex(0)
 
         # 模式切换按钮
         self.mode_btn = PushButton("标注模式 (Q)")
         self.mode_btn.setCheckable(True)
         self.mode_btn.setChecked(False)
+        self.mode_btn.setFixedWidth(100)
 
         # 缩放控制按钮
-        self.zoom_out_btn = PushButton("缩小 (-)")
-        self.zoom_reset_btn = PushButton("重置视图 (R)")
-        self.zoom_in_btn = PushButton("放大 (+)")
+        zoom_layout = QHBoxLayout()
+        zoom_layout.setSpacing(2)
+        self.zoom_out_btn = PushButton("−")  # 使用减号符号，更紧凑
+        self.zoom_reset_btn = PushButton("↺")  # 使用重置符号
+        self.zoom_in_btn = PushButton("+")
 
-        for btn in [
-            self.prev_btn,
-            self.next_btn,
-            self.detect_btn,
-            self.undo_btn,
-            self.clear_btn,
-            self.mode_btn,
-            self.zoom_out_btn,
-            self.zoom_reset_btn,
-            self.zoom_in_btn,
-        ]:
-            toolbar.addWidget(btn)
+        zoom_layout.addWidget(self.zoom_out_btn)
+        zoom_layout.addWidget(self.zoom_reset_btn)
+        zoom_layout.addWidget(self.zoom_in_btn)
+
+        toolbar.addWidget(self.prev_btn)
+        toolbar.addWidget(self.next_btn)
+        toolbar.addWidget(self.tools_combo)
+        toolbar.addWidget(self.mode_btn)
+        toolbar.addLayout(zoom_layout)
         toolbar.addStretch()
 
         info = QHBoxLayout()
         self.image_label = BodyLabel("未加载")
         self.progress_label = CaptionLabel("0/0")
+
+        # 添加页码跳转功能
+        jump_layout = QHBoxLayout()
+        jump_layout.setSpacing(4)
+        self.page_edit = LineEdit()
+        self.page_edit.setPlaceholderText("跳转页码")
+        self.page_edit.setFixedWidth(80)
+        self.jump_btn = PushButton("跳转")
+        jump_layout.addWidget(CaptionLabel("跳转:"))
+        jump_layout.addWidget(self.page_edit)
+        jump_layout.addWidget(self.jump_btn)
+        jump_layout.addStretch()
+
         info.addWidget(self.image_label)
         info.addStretch()
+        info.addLayout(jump_layout)  # 将跳转布局添加到info布局中
         info.addWidget(self.progress_label)
 
         left.addLayout(info)
@@ -543,12 +563,10 @@ class AnnotationWidget(QWidget):
         self.load_btn.clicked.connect(self._load_dataset)
         self.prev_btn.clicked.connect(self._prev_image)
         self.next_btn.clicked.connect(self._next_image)
-        self.detect_btn.clicked.connect(self._detect_annotations)
-        self.undo_btn.clicked.connect(self._undo_annotation)
-        self.clear_btn.clicked.connect(self._clear_annotations)
         self.export_btn.clicked.connect(self._export_yolo)
         self.organize_btn.clicked.connect(self._organize_dataset)
         self.add_class_btn.clicked.connect(self._add_class)
+        self.tools_combo.currentTextChanged.connect(self._on_tool_selected)
 
         # 模式切换连接
         self.mode_btn.clicked.connect(self._toggle_drawing_mode)
@@ -560,6 +578,9 @@ class AnnotationWidget(QWidget):
 
         self.canvas.bboxDrawn.connect(self._on_bbox_drawn)
         self.class_list.currentRowChanged.connect(lambda row: setattr(self.canvas, "current_class_id", row))
+
+        self.jump_btn.clicked.connect(self._jump_to_page)
+        self.page_edit.returnPressed.connect(self._jump_to_page)  # 按回车也可以跳转
 
     # ==================== 快捷键 ====================
     def keyPressEvent(self, event):
@@ -604,6 +625,18 @@ class AnnotationWidget(QWidget):
             super().keyPressEvent(event)
 
     # ==================== 核心功能 ====================
+    def _on_tool_selected(self, tool_name):
+        """处理工具下拉菜单选择"""
+        if tool_name == "自动检测":
+            self._detect_annotations()
+        elif tool_name == "撤销标注":
+            self._undo_annotation()
+        elif tool_name == "清空标注":
+            self._clear_annotations()
+
+        # 重置下拉菜单到默认状态
+        self.tools_combo.setCurrentIndex(0)
+
     def _load_dataset(self):
         folder = QFileDialog.getExistingDirectory(self, "选择图片文件夹")
         if not folder:
@@ -721,6 +754,30 @@ class AnnotationWidget(QWidget):
         with open(self.dataset_path / "classes.txt", "w", encoding="utf-8") as f:
             for c in self.classes:
                 f.write(c + "\n")
+
+    def _jump_to_page(self):
+        """跳转到指定页码"""
+        if not self.image_files:
+            return
+
+        try:
+            page_num = int(self.page_edit.text().strip())
+            if 1 <= page_num <= len(self.image_files):
+                # 自动保存当前标注
+                if self.auto_save.isChecked():
+                    self._export_yolo()
+
+                self.current_index = page_num - 1
+                self._load_current_image()
+
+                # 清空输入框
+                self.page_edit.clear()
+
+                InfoBar.success("跳转成功", f"已跳转到第 {page_num} 页", duration=1000, parent=self)
+            else:
+                InfoBar.warning("页码无效", f"请输入 1-{len(self.image_files)} 之间的数字", parent=self)
+        except ValueError:
+            InfoBar.warning("输入错误", "请输入有效的页码数字", parent=self)
 
     # ==================== 模式切换功能 ====================
     def _toggle_drawing_mode(self):
