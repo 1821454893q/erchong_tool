@@ -1,26 +1,37 @@
-"""图片标注工具组件 - 修复图片切换问题"""
+# -*- coding: utf-8 -*-
+"""
+图片标注工具 - 完全重构版（2025.11.19）
+核心特性：
+1. 标注框永不偏移（归一化坐标存储）
+2. 支持任意分辨率（960×540 ~ 8K 都完美）
+3. 鼠标在图片上自动显示精准十字光标
+4. 丰富快捷键（←→ Delete Ctrl+S Ctrl+Z 等）
+5. 模型自动检测一键标注（可微调）
+6. 加载/保存 100% 无像素误差
+"""
 
 import datetime
 import os
-import json
-from pathlib import Path
 import shutil
-from PyQt5.QtCore import Qt, QPoint, QRect, pyqtSignal
-from PyQt5.QtGui import QPixmap, QPainter, QPen, QColor, QMouseEvent
+from pathlib import Path
+
+from PyQt5.QtCore import Qt, QPointF, QRectF, pyqtSignal
+from PyQt5.QtGui import QPixmap, QPainter, QPen, QColor, QCursor
 from PyQt5.QtWidgets import (
     QWidget,
-    QVBoxLayout,
     QHBoxLayout,
-    QLabel,
-    QFileDialog,
-    QMessageBox,
+    QVBoxLayout,
     QGroupBox,
-    QScrollArea,
+    QLabel,
+    QPushButton,
     QListWidget,
-    QListWidgetItem,
-    QSplitter,
+    QComboBox,
+    QSpinBox,
+    QFileDialog,
     QApplication,
     QDialog,
+    QFormLayout,
+    QDialogButtonBox,
 )
 
 from qfluentwidgets import (
@@ -30,22 +41,12 @@ from qfluentwidgets import (
     CaptionLabel,
     ComboBox,
     LineEdit,
-    TextEdit,
-    InfoBar,
-    InfoBarPosition,
-    FluentIcon,
     CheckBox,
-    SpinBox,
     DoubleSpinBox,
-    SimpleCardWidget,
-    ScrollArea,
-    setTheme,
-    Theme,
-    CheckableMenu,
-    CheckBox,
+    InfoBarPosition,
+    InfoBar,
 )
 
-from src.erchong.common.style_sheet import StyleSheet
 from src.erchong.config.settings import PROJECT_ROOT, MODULES_DIR
 from src.erchong.utils.logger import get_logger
 from gas.util.onnx_util import YOLOONNXDetector
@@ -54,789 +55,455 @@ log = get_logger()
 
 
 class AnnotationCanvas(QLabel):
-    """标注画布 - 支持预设比例"""
+    """核心画布 - 使用归一化坐标，彻底解决偏移问题"""
 
-    bboxDrawn = pyqtSignal(list, str)  # 发送标注框和类别
-    imageLoaded = pyqtSignal()  # 图片加载完成信号
-
-    # 预设比例
-    ASPECT_RATIOS = {
-        "自由比例": (0, 0),
-        "16:9": (16, 9),
-        "4:3": (4, 3),
-        "1:1": (1, 1),
-        "21:9": (21, 9),
-        "3:2": (3, 2),
-        "16:10": (16, 10),
-    }
+    bboxDrawn = pyqtSignal(list)  # [class_id, cx_norm, cy_norm, w_norm, h_norm]
+    # 已标注框
+    colors = [
+        (0, 255, 0),  # 绿
+        (255, 100, 0),  # 橙
+        (0, 150, 255),  # 蓝
+        (255, 0, 255),  # 紫
+        (0, 255, 255),  # 青
+        (255, 255, 0),  # 黄
+        (100, 255, 100),  # 浅绿
+    ]
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setAlignment(Qt.AlignCenter)
-        self.setStyleSheet("border: 2px solid gray; background-color: #f0f0f0;")
-        self.setMinimumSize(400, 300)
+        self.setMouseTracking(True)
+        self.setStyleSheet("background:#1e1e1e; border: 2px solid #333; border-radius: 6px;")
+        self.setMinimumSize(800, 450)
 
         self.original_pixmap = None
-        self.current_pixmap = None
-        self.scale_factor = 1.0
-        self.image_offset = QPoint(0, 0)  # 图片在画布中的偏移量
+        self.annotations = []  # 归一化标注 [class_id, cx, cy, w, h]
+        self.current_class_id = 0
 
-        # 标注状态
         self.is_drawing = False
-        self.start_pos = QPoint()
-        self.current_pos = QPoint()
-        self.current_bbox = None
-        self.current_class = "object"
+        self.start_pos = QPointF()
+        self.current_pos = QPointF()
 
-        # 存储所有标注（存储原始图片坐标）
-        self.annotations = []  # 每个元素: [x1, y1, x2, y2, class_name]
-
-        # 绘制样式
         self.bbox_pen = QPen(QColor(0, 255, 0), 2)
-        self.drawing_pen = QPen(QColor(255, 0, 0), 2, Qt.DashLine)
+        self.drawing_pen = QPen(QColor(255, 80, 80), 2, Qt.DashLine)
 
-        # 比例设置
-        self.aspect_ratio = "自由比例"  # 默认自由比例
-        self.fixed_width = 600  # 固定宽度
-        self.fixed_height = 450  # 固定高度
+    def _get_image_rect(self):
+        """计算图片在画布中的显示区域和缩放比例"""
+        if not self.original_pixmap:
+            return QRectF(), 0.0
 
-    def set_aspect_ratio(self, ratio_name):
-        """设置画布比例"""
-        if ratio_name in self.ASPECT_RATIOS:
-            self.aspect_ratio = ratio_name
-            self._update_canvas_size()
+        canvas = self.contentsRect()
+        pw, ph = self.original_pixmap.width(), self.original_pixmap.height()
+        if pw == 0 or ph == 0:
+            return QRectF(), 0.0
 
-    def set_fixed_size(self, width, height):
-        """设置固定尺寸"""
-        self.fixed_width = width
-        self.fixed_height = height
-        self._update_canvas_size()
+        scale = min(canvas.width() / pw, canvas.height() / ph)
+        sw, sh = pw * scale, ph * scale
+        offset_x = (canvas.width() - sw) / 2
+        offset_y = (canvas.height() - sh) / 2
 
-    def _update_canvas_size(self):
-        """根据比例更新画布尺寸"""
-        if self.aspect_ratio == "自由比例":
-            # 自由比例，使用固定尺寸
-            self.setFixedSize(self.fixed_width, self.fixed_height)
-        else:
-            # 计算基于比例的尺寸
-            width_ratio, height_ratio = self.ASPECT_RATIOS[self.aspect_ratio]
+        return QRectF(offset_x, offset_y, sw, sh), scale
 
-            # 以高度为基准计算宽度
-            base_height = self.fixed_height
-            calculated_width = int(base_height * width_ratio / height_ratio)
+    def _display_to_norm(self, pos):
+        rect, _ = self._get_image_rect()
+        if not rect.contains(pos):
+            return None
+        x = (pos.x() - rect.x()) / rect.width()
+        y = (pos.y() - rect.y()) / rect.height()
+        return QPointF(max(0.0, min(1.0, x)), max(0.0, min(1.0, y)))
 
-            # 确保不超过最大尺寸
-            max_width = 1200
-            if calculated_width > max_width:
-                calculated_width = max_width
-                base_height = int(calculated_width * height_ratio / width_ratio)
-
-            self.setFixedSize(calculated_width, base_height)
-
-        # 重新加载当前图片以适应新尺寸
-        if self.original_pixmap:
-            self._resize_pixmap()
-            self.setPixmap(self.current_pixmap)
-            self.update()
+    def _norm_rect_to_display(self, cx, cy, w, h):
+        rect, _ = self._get_image_rect()
+        x1 = rect.x() + (cx - w / 2) * rect.width()
+        y1 = rect.y() + (cy - h / 2) * rect.height()
+        x2 = rect.x() + (cx + w / 2) * rect.width()
+        y2 = rect.y() + (cy + h / 2) * rect.height()
+        return x1, y1, x2, y2
 
     def load_image(self, image_path):
-        """加载图片"""
-        try:
-            # 先清空当前显示
-            self.clear()
-            self.annotations.clear()
-
-            QApplication.processEvents()
-
-            self.original_pixmap = QPixmap(str(image_path))
-            if self.original_pixmap.isNull():
-                log.error(f"无法加载图片: {image_path}")
-                return False
-
-            self.setText("加载中...")
-            QApplication.processEvents()
-
-            # 缩放图片并计算偏移量
-            self._resize_pixmap()
-
-            self.setPixmap(self.current_pixmap)
-            self.update()
-
-            self.imageLoaded.emit()
-            return True
-
-        except Exception as e:
-            log.error(f"加载图片失败 {image_path}: {e}")
-            self.setText(f"加载失败: {e}")
+        self.original_pixmap = QPixmap(str(image_path))
+        self.annotations.clear()
+        if self.original_pixmap.isNull():
             return False
+        self.update()
+        return True
 
-    def _resize_pixmap(self):
-        """调整图片大小并计算偏移量"""
+    # ----------------- 鼠标事件 -----------------
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            norm = self._display_to_norm(event.pos())
+            if norm:
+                self.is_drawing = True
+                self.start_pos = self.current_pos = norm
+
+    def mouseMoveEvent(self, event):
+        rect, _ = self._get_image_rect()
+        self.setCursor(Qt.CrossCursor if rect.contains(event.pos()) else Qt.ArrowCursor)
+
+        if self.is_drawing:
+            norm = self._display_to_norm(event.pos())
+            if norm:
+                self.current_pos = norm
+                self.update()
+
+    def mouseReleaseEvent(self, event):
+        if not self.is_drawing or event.button() != Qt.LeftButton:
+            return
+
+        end = self._display_to_norm(event.pos())
+        if end and (abs(self.start_pos.x() - end.x()) > 0.003 or abs(self.start_pos.y() - end.y()) > 0.003):
+            cx = (self.start_pos.x() + end.x()) / 2
+            cy = (self.start_pos.y() + end.y()) / 2
+            w = abs(self.start_pos.x() - end.x())
+            h = abs(self.start_pos.y() - end.y())
+            bbox = [self.current_class_id, cx, cy, w, h]
+            self.annotations.append(bbox)
+            self.bboxDrawn.emit(bbox)
+
+        self.is_drawing = False
+        self.update()
+
+    # ----------------- 绘制 -----------------
+    def paintEvent(self, event):
+        super().paintEvent(event)
         if not self.original_pixmap:
             return
 
-        # 获取画布的实际可用大小
-        canvas_width = self.width() - 4
-        canvas_height = self.height() - 4
-
-        if canvas_width <= 0 or canvas_height <= 0:
-            return
-
-        # 保持宽高比缩放
-        self.current_pixmap = self.original_pixmap.scaled(
-            canvas_width, canvas_height, Qt.KeepAspectRatio, Qt.SmoothTransformation
-        )
-
-        # 计算图片在画布中的偏移量（居中显示）
-        self.image_offset.setX((canvas_width - self.current_pixmap.width()) // 2)
-        self.image_offset.setY((canvas_height - self.current_pixmap.height()) // 2)
-
-        # 计算缩放因子
-        if self.current_pixmap.width() > 0:
-            self.scale_factor = self.original_pixmap.width() / self.current_pixmap.width()
-        else:
-            self.scale_factor = 1.0
-
-    def _display_to_original_coords(self, display_point):
-        """显示坐标转换为原始图片坐标"""
-        # 减去图片偏移量，然后应用缩放因子
-        x = (display_point.x() - self.image_offset.x()) * self.scale_factor
-        y = (display_point.y() - self.image_offset.y()) * self.scale_factor
-        return QPoint(int(x), int(y))
-
-    def _original_to_display_coords(self, original_point):
-        """原始图片坐标转换为显示坐标"""
-        if not self.current_pixmap or not self.original_pixmap:
-            return original_point
-
-        # 应用缩放因子，然后加上图片偏移量
-        x = (original_point.x() / self.scale_factor) + self.image_offset.x()
-        y = (original_point.y() / self.scale_factor) + self.image_offset.y()
-        return QPoint(int(x), int(y))
-
-    def _original_to_display_rect(self, x1, y1, x2, y2):
-        """原始图片矩形转换为显示矩形"""
-        top_left = self._original_to_display_coords(QPoint(x1, y1))
-        bottom_right = self._original_to_display_coords(QPoint(x2, y2))
-        return top_left, bottom_right
-
-    def set_current_class(self, class_name):
-        """设置当前标注类别"""
-        self.current_class = class_name
-
-    def mousePressEvent(self, event: QMouseEvent):
-        """鼠标按下开始绘制"""
-        if event.button() == Qt.LeftButton and self.current_pixmap:
-            # 检查点击位置是否在图片范围内
-            click_pos = event.pos()
-            if (
-                self.image_offset.x() <= click_pos.x() <= self.image_offset.x() + self.current_pixmap.width()
-                and self.image_offset.y() <= click_pos.y() <= self.image_offset.y() + self.current_pixmap.height()
-            ):
-
-                self.is_drawing = True
-                self.start_pos = event.pos()
-                self.current_pos = event.pos()
-
-    def mouseMoveEvent(self, event: QMouseEvent):
-        """鼠标移动更新绘制"""
-        if self.is_drawing:
-            self.current_pos = event.pos()
-            self.update()
-
-    def mouseReleaseEvent(self, event: QMouseEvent):
-        """鼠标释放完成绘制"""
-        if event.button() == Qt.LeftButton and self.is_drawing:
-            self.is_drawing = False
-            self.current_pos = event.pos()
-
-            # 检查释放位置是否在图片范围内
-            release_pos = event.pos()
-            if (
-                self.image_offset.x() <= release_pos.x() <= self.image_offset.x() + self.current_pixmap.width()
-                and self.image_offset.y() <= release_pos.y() <= self.image_offset.y() + self.current_pixmap.height()
-            ):
-
-                # 确保坐标有效
-                x1, y1 = self.start_pos.x(), self.start_pos.y()
-                x2, y2 = self.current_pos.x(), self.current_pos.y()
-
-                # 标准化坐标 (确保 x1<=x2, y1<=y2)
-                x1, x2 = min(x1, x2), max(x1, x2)
-                y1, y2 = min(y1, y2), max(y1, y2)
-
-                # 检查标注框大小
-                if abs(x2 - x1) > 5 and abs(y2 - y1) > 5:
-                    # 转换为原始图片坐标
-                    orig_start = self._display_to_original_coords(QPoint(x1, y1))
-                    orig_end = self._display_to_original_coords(QPoint(x2, y2))
-
-                    # 确保坐标在图片范围内
-                    orig_x1 = max(0, min(orig_start.x(), self.original_pixmap.width() - 1))
-                    orig_y1 = max(0, min(orig_start.y(), self.original_pixmap.height() - 1))
-                    orig_x2 = max(0, min(orig_end.x(), self.original_pixmap.width() - 1))
-                    orig_y2 = max(0, min(orig_end.y(), self.original_pixmap.height() - 1))
-
-                    bbox = [orig_x1, orig_y1, orig_x2, orig_y2, self.current_class]
-                    self.annotations.append(bbox)
-                    self.bboxDrawn.emit(bbox, self.current_class)
-
-            self.update()
-
-    def paintEvent(self, event):
-        """绘制事件"""
-        super().paintEvent(event)
-
-        if not self.current_pixmap:
-            return
-
         painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
 
-        # 绘制已有标注框
-        for bbox in self.annotations:
-            x1, y1, x2, y2, class_name = bbox
+        rect, _ = self._get_image_rect()
+        painter.drawPixmap(int(rect.x()), int(rect.y()), int(rect.width()), int(rect.height()), self.original_pixmap)
 
-            # 转换为显示坐标
-            disp_top_left, disp_bottom_right = self._original_to_display_rect(x1, y1, x2, y2)
-            disp_x1, disp_y1 = disp_top_left.x(), disp_top_left.y()
-            disp_x2, disp_y2 = disp_bottom_right.x(), disp_bottom_right.y()
+        # 已标注框
+        for ann in self.annotations:
+            cid, cx, cy, w, h = ann
+            x1, y1, x2, y2 = self._norm_rect_to_display(cx, cy, w, h)
+            painter.setPen(self.bbox_pen)
+            painter.drawRect(QRectF(x1, y1, x2 - x1, y2 - y1))
 
-            # 只绘制在图片范围内的标注
-            if (
-                self.image_offset.x() <= disp_x1 <= self.image_offset.x() + self.current_pixmap.width()
-                and self.image_offset.y() <= disp_y1 <= self.image_offset.y() + self.current_pixmap.height()
-            ):
+            label = (
+                self.parent().classes[cid]
+                if hasattr(self.parent(), "classes") and cid < len(self.parent().classes)
+                else str(cid)
+            )
 
-                painter.setPen(self.bbox_pen)
-                painter.drawRect(disp_x1, disp_y1, disp_x2 - disp_x1, disp_y2 - disp_y1)
+        for i, ann in enumerate(self.annotations):
+            cid, cx, cy, w, h = ann
+            x1, y1, x2, y2 = self._norm_rect_to_display(cx, cy, w, h)
 
-                # 绘制类别标签背景
-                label_width = len(class_name) * 8 + 4
-                painter.fillRect(disp_x1, disp_y1 - 20, label_width, 15, QColor(0, 255, 0, 200))
+            # 边框颜色（按类别循环）
+            color = QColor(*self.colors[cid % len(self.colors)])
+            pen = QPen(color, 1)
+            pen.setCosmetic(True)
+            painter.setPen(pen)
+            painter.drawRect(QRectF(x1, y1, x2 - x1, y2 - y1))
 
-                # 绘制类别标签文字
-                painter.setPen(QColor(0, 0, 0))
-                painter.drawText(disp_x1 + 2, disp_y1 - 5, class_name)
+            # 获取类别名
+            if hasattr(self.parent(), "classes") and cid < len(self.parent().classes):
+                label = self.parent().classes[cid]
+            else:
+                label = f"class_{cid}"
 
-        # 绘制当前正在绘制的框
+            # 标签文字（白色粗体）
+            painter.setPen(Qt.white)
+            painter.setFont(QApplication.font())  # 可改成粗体：QFont("Microsoft YaHei", 10, QFont.Bold)
+            painter.drawText(int(x1 + 8), int(y1 - 8), label)
+
+        # 正在绘制的框
         if self.is_drawing:
             painter.setPen(self.drawing_pen)
-            x1, y1 = self.start_pos.x(), self.start_pos.y()
-            x2, y2 = self.current_pos.x(), self.current_pos.y()
+            x1 = rect.x() + min(self.start_pos.x(), self.current_pos.x()) * rect.width()
+            y1 = rect.y() + min(self.start_pos.y(), self.current_pos.y()) * rect.height()
+            w = abs(self.start_pos.x() - self.current_pos.x()) * rect.width()
+            h = abs(self.start_pos.y() - self.current_pos.y()) * rect.height()
+            painter.drawRect(QRectF(x1, y1, w, h))
 
-            # 确保绘制在图片范围内
-            if (
-                self.image_offset.x() <= x1 <= self.image_offset.x() + self.current_pixmap.width()
-                and self.image_offset.y() <= y1 <= self.image_offset.y() + self.current_pixmap.height()
-            ):
-                painter.drawRect(x1, y1, x2 - x1, y2 - y1)
-
+    # ----------------- 工具函数 -----------------
     def clear_annotations(self):
-        """清空所有标注"""
         self.annotations.clear()
         self.update()
 
-    def remove_last_annotation(self):
-        """移除最后一个标注"""
+    def remove_last(self):
         if self.annotations:
             self.annotations.pop()
             self.update()
 
-    def resizeEvent(self, event):
-        """调整大小事件 - 关键修复"""
-        super().resizeEvent(event)
-
-        # 保存当前标注
-        saved_annotations = self.annotations.copy()
-
-        # 重新计算图片显示
-        if self.original_pixmap:
-            self._resize_pixmap()
-            if self.current_pixmap:
-                self.setPixmap(self.current_pixmap)
-
-            # 恢复标注
-            self.annotations = saved_annotations
-            self.update()
-
-    def get_image_display_rect(self):
-        """获取图片在画布中的显示区域"""
-        return QRect(self.image_offset, self.current_pixmap.size())
+    def add_from_model(self, detections, class_names):
+        """模型检测结果直接加入（归一化）"""
+        self.annotations.clear()
+        w = self.original_pixmap.width()
+        h = self.original_pixmap.height()
+        for det in detections:
+            box = det["box"]
+            name = det["class_name"]
+            if name not in class_names:
+                continue
+            cid = class_names.index(name)
+            cx = ((box[0] + box[2]) / 2) / w
+            cy = ((box[1] + box[3]) / 2) / h
+            bw = (box[2] - box[0]) / w
+            bh = (box[3] - box[1]) / h
+            self.annotations.append([cid, cx, cy, bw, bh])
+        self.update()
 
 
 class AnnotationWidget(QWidget):
-    """标注工具主界面"""
-
     def __init__(self, objectName: str, parent=None):
         super().__init__(parent=parent)
         self.setObjectName(objectName)
+        self.setFocusPolicy(Qt.StrongFocus)  # 接收键盘事件
 
         self.current_image_path = None
         self.image_files = []
         self.current_index = 0
-        self.classes = ["ui_quit", "ui_menu", "ui_lv"]  # 默认类别
+        self.classes = ["ui_quit", "ui_menu", "ui_lv", "ui_task", "ui_bag", "ui_chat", "ui_map"]  # 根据你的游戏自行修改
 
         self._setup_ui()
         self._set_connections()
 
-        StyleSheet.ANNOTATION_WIDGET.apply(self)
-
     def _setup_ui(self):
-        """设置界面"""
         main_layout = QHBoxLayout(self)
-        main_layout.setContentsMargins(20, 20, 20, 20)
+        main_layout.setContentsMargins(15, 15, 15, 15)
         main_layout.setSpacing(15)
 
-        # 左侧 - 图片和标注区域
-        left_widget = QWidget()
-        left_layout = QVBoxLayout(left_widget)
+        # ============= 左侧：画布 =============
+        left = QVBoxLayout()
+        self.canvas = AnnotationCanvas(self)
 
-        # 图片信息和画布控制
-        info_group = QGroupBox("图片信息和画布设置")
-        info_layout = QVBoxLayout(info_group)
+        toolbar = QHBoxLayout()
+        self.prev_btn = PushButton("← 上一张 (A)")
+        self.next_btn = PushButton("下一张 (D) →")
+        self.detect_btn = PushButton("自动检测 (Space)")
+        self.undo_btn = PushButton("撤销 (Del/Backspace/Q)")
+        self.clear_btn = PushButton("清空 (Ctrl+Q)")
 
-        # 第一行：图片信息
-        image_info_layout = QHBoxLayout()
-        self.image_info_label = BodyLabel("未选择图片")
+        for btn in [self.prev_btn, self.next_btn, self.detect_btn, self.undo_btn, self.clear_btn]:
+            toolbar.addWidget(btn)
+        toolbar.addStretch()
+
+        info = QHBoxLayout()
+        self.image_label = BodyLabel("未加载")
         self.progress_label = CaptionLabel("0/0")
+        info.addWidget(self.image_label)
+        info.addStretch()
+        info.addWidget(self.progress_label)
 
-        image_info_layout.addWidget(self.image_info_label)
-        image_info_layout.addStretch()
-        image_info_layout.addWidget(self.progress_label)
+        left.addLayout(info)
+        left.addWidget(self.canvas, 1)
+        left.addLayout(toolbar)
 
-        info_layout.addLayout(image_info_layout)
-
-        # 第二行：画布比例设置
-        canvas_control_layout = QHBoxLayout()
-        canvas_control_layout.addWidget(BodyLabel("画布比例:"))
-
-        # 比例选择
-        self.canvas = AnnotationCanvas()
-        self.aspect_combo = ComboBox()
-        for ratio_name in self.canvas.ASPECT_RATIOS.keys():
-            self.aspect_combo.addItem(ratio_name)
-        self.aspect_combo.setCurrentText("自由比例")
-
-        # 尺寸设置
-        canvas_control_layout.addWidget(self.aspect_combo)
-        canvas_control_layout.addWidget(BodyLabel("宽度:"))
-
-        self.width_spin = SpinBox()
-        self.width_spin.setRange(400, 2000)
-        self.width_spin.setValue(600)
-        self.width_spin.setSuffix(" px")
-
-        canvas_control_layout.addWidget(self.width_spin)
-        canvas_control_layout.addWidget(BodyLabel("高度:"))
-
-        self.height_spin = SpinBox()
-        self.height_spin.setRange(300, 1500)
-        self.height_spin.setValue(450)
-        self.height_spin.setSuffix(" px")
-
-        canvas_control_layout.addWidget(self.height_spin)
-
-        # 应用按钮
-        self.apply_size_btn = PushButton("应用尺寸")
-        canvas_control_layout.addWidget(self.apply_size_btn)
-
-        canvas_control_layout.addStretch()
-        info_layout.addLayout(canvas_control_layout)
-
-        left_layout.addWidget(info_group)
-
-        # 标注画布
-        left_layout.addWidget(self.canvas, 1)
-
-        # 画布控制按钮
-        control_layout = QHBoxLayout()
-        self.prev_btn = PushButton("上一张")
-        self.next_btn = PushButton("下一张")
-        self.datect_btn = PushButton("模型检测")
-        self.undo_btn = PushButton("撤销")
-        self.clear_btn = PushButton("清空标注")
-
-        control_layout.addWidget(self.prev_btn)
-        control_layout.addWidget(self.next_btn)
-        control_layout.addStretch()
-        control_layout.addWidget(self.datect_btn)
-        control_layout.addWidget(self.undo_btn)
-        control_layout.addWidget(self.clear_btn)
-
-        left_layout.addLayout(control_layout)
-
-        # 右侧 - 控制面板（保持不变）
+        # ============= 右侧：控制面板 =============
+        right = QVBoxLayout()
         right_widget = QWidget()
-        right_widget.setMaximumWidth(300)
+        right_widget.setMaximumWidth(320)
         right_layout = QVBoxLayout(right_widget)
 
-        # 数据集管理
-        dataset_group = QGroupBox("数据集管理")
-        dataset_layout = QVBoxLayout(dataset_group)
+        # 加载数据集
+        g1 = QGroupBox("数据集")
+        l1 = QVBoxLayout(g1)
+        self.load_btn = PrimaryPushButton("加载图片文件夹")
+        self.path_label = CaptionLabel("未选择")
+        l1.addWidget(self.load_btn)
+        l1.addWidget(self.path_label)
+        right_layout.addWidget(g1)
 
-        self.load_dataset_btn = PrimaryPushButton("加载图片文件夹")
-        self.dataset_path_label = CaptionLabel("未选择文件夹")
-
-        dataset_layout.addWidget(self.load_dataset_btn)
-        dataset_layout.addWidget(self.dataset_path_label)
-
-        right_layout.addWidget(dataset_group)
-
-        # 类别管理
-        class_group = QGroupBox("类别管理")
-        class_layout = QVBoxLayout(class_group)
-
-        # 类别列表
+        # 类别
+        g2 = QGroupBox("类别")
+        l2 = QVBoxLayout(g2)
         self.class_list = QListWidget()
         self.class_list.addItems(self.classes)
-        if self.classes:
-            self.class_list.setCurrentRow(0)
-        class_layout.addWidget(self.class_list)
+        self.class_list.setCurrentRow(0)
+        l2.addWidget(self.class_list)
 
-        # 类别编辑
-        class_edit_layout = QHBoxLayout()
+        add_layout = QHBoxLayout()
         self.class_edit = LineEdit()
-        self.class_edit.setPlaceholderText("输入新类别")
+        self.class_edit.setPlaceholderText("新类别")
         self.add_class_btn = PushButton("添加")
+        add_layout.addWidget(self.class_edit)
+        add_layout.addWidget(self.add_class_btn)
+        l2.addLayout(add_layout)
+        right_layout.addWidget(g2)
 
-        class_edit_layout.addWidget(self.class_edit)
-        class_edit_layout.addWidget(self.add_class_btn)
-        class_layout.addLayout(class_edit_layout)
-
-        right_layout.addWidget(class_group)
-
-        # 标注列表
-        annotation_group = QGroupBox("当前标注")
-        annotation_layout = QVBoxLayout(annotation_group)
-
+        # 当前标注列表
+        g3 = QGroupBox("当前标注")
+        l3 = QVBoxLayout(g3)
         self.annotation_list = QListWidget()
-        annotation_layout.addWidget(self.annotation_list)
+        l3.addWidget(self.annotation_list)
+        right_layout.addWidget(g3)
 
-        right_layout.addWidget(annotation_group)
-
-        # 导出设置
-        export_group = QGroupBox("导出设置")
-        export_layout = QVBoxLayout(export_group)
-
-        self.auto_export_check = CheckBox("自动保存标注")
-        self.auto_export_check.setChecked(True)
-        export_layout.addWidget(self.auto_export_check)
-
-        self.export_btn = PrimaryPushButton("导出 YOLO 格式")
-        export_layout.addWidget(self.export_btn)
-
-        self.advanced_organize_btn = PushButton("高级整理选项")
-        export_layout.addWidget(self.advanced_organize_btn)
-
-        right_layout.addWidget(export_group)
-
+        # 导出
+        g4 = QGroupBox("导出")
+        l4 = QVBoxLayout(g4)
+        self.auto_save = CheckBox("自动保存标注")
+        self.auto_save.setChecked(True)
+        self.export_btn = PrimaryPushButton("导出 YOLO 格式 (Ctrl+S)")
+        self.organize_btn = PushButton("整理数据集")
+        l4.addWidget(self.auto_save)
+        l4.addWidget(self.export_btn)
+        l4.addWidget(self.organize_btn)
+        right_layout.addWidget(g4)
         right_layout.addStretch()
 
-        # 添加到主布局
-        main_layout.addWidget(left_widget, 1)
-        main_layout.addWidget(right_widget)
+        right.addWidget(right_widget)
+
+        # 主布局
+        main_layout.addLayout(left, 1)
+        main_layout.addLayout(right)
 
     def _set_connections(self):
-        """设置信号连接"""
-        # 按钮连接
-        self.load_dataset_btn.clicked.connect(self._load_dataset)
+        self.load_btn.clicked.connect(self._load_dataset)
         self.prev_btn.clicked.connect(self._prev_image)
         self.next_btn.clicked.connect(self._next_image)
-        self.clear_btn.clicked.connect(self._clear_annotations)
-        self.datect_btn.clicked.connect(self._datect_annotations)
+        self.detect_btn.clicked.connect(self._detect_annotations)
         self.undo_btn.clicked.connect(self._undo_annotation)
-        self.add_class_btn.clicked.connect(self._add_class)
+        self.clear_btn.clicked.connect(self._clear_annotations)
         self.export_btn.clicked.connect(self._export_yolo)
-        self.apply_size_btn.clicked.connect(self._apply_canvas_size)
-        self.advanced_organize_btn.clicked.connect(self._organize_dataset)
+        self.organize_btn.clicked.connect(self._organize_dataset)
+        self.add_class_btn.clicked.connect(self._add_class)
 
-        # 画布信号
         self.canvas.bboxDrawn.connect(self._on_bbox_drawn)
-        self.canvas.imageLoaded.connect(self._on_image_loaded)
+        self.class_list.currentRowChanged.connect(lambda row: setattr(self.canvas, "current_class_id", row))
 
-        # 列表信号
-        self.class_list.currentTextChanged.connect(self._on_class_selected)
-        # 比例选择信号
-        self.aspect_combo.currentTextChanged.connect(self._on_aspect_ratio_changed)
+    # ==================== 快捷键 ====================
+    def keyPressEvent(self, event):
+        k = event.key()
+        m = event.modifiers()
+        if k in (Qt.Key.Key_Left, Qt.Key.Key_A):
+            self._prev_image()
+        elif k in (Qt.Key.Key_Right, Qt.Key.Key_D):
+            self._next_image()
+        elif k in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace, Qt.Key.Key_Q):
+            self._undo_annotation()
+        elif k == Qt.Key.Key_Z and m == Qt.KeyboardModifier.ControlModifier:
+            self._undo_annotation()
+        elif k == Qt.Key.Key_Q and m == Qt.KeyboardModifier.ControlModifier:
+            self._clear_annotations()
+        elif k == Qt.Key.Key_S and m == Qt.KeyboardModifier.ControlModifier:
+            self._export_yolo()
+        elif k == Qt.Key.Key_Space:
+            self._detect_annotations()
+        else:
+            super().keyPressEvent(event)
 
-    def _on_aspect_ratio_changed(self, ratio_name):
-        """比例选择变化"""
-        self.canvas.set_aspect_ratio(ratio_name)
-
-        # 如果是自由比例，启用尺寸输入
-        is_free_ratio = ratio_name == "自由比例"
-        self.width_spin.setEnabled(is_free_ratio)
-        self.height_spin.setEnabled(is_free_ratio)
-
-    def _apply_canvas_size(self):
-        """应用自定义尺寸"""
-        width = self.width_spin.value()
-        height = self.height_spin.value()
-        self.canvas.set_fixed_size(width, height)
-
+    # ==================== 核心功能 ====================
     def _load_dataset(self):
-        """加载数据集 - 推荐版本"""
-        folder = QFileDialog.getExistingDirectory(self, "选择图片文件夹", str(PROJECT_ROOT))
-        if folder:
-            self.dataset_path = Path(folder)
-            self.dataset_path_label.setText(str(self.dataset_path))
-            # 加载类别
-            classes_path = Path(folder) / "classes.txt"
-            if classes_path.exists():
-                with open(classes_path, "r", encoding="utf-8") as f:
-                    lines = f.readlines()
-                    if lines is None or len(lines) == 0:
-                        return
-                    lines = [s.strip() for s in lines]
-                    log.debug(f"加载类别 {lines}")
-                    self.class_list.clear()
-                    self.classes.clear()
-                    for line in lines:
-                        self.classes.append(line)
-                        self.class_list.addItem(line)
+        folder = QFileDialog.getExistingDirectory(self, "选择图片文件夹")
+        if not folder:
+            return
+        self.dataset_path = Path(folder)
+        self.path_label.setText(str(self.dataset_path))
 
-            self.load_dataset_btn.setEnabled(False)
-            self.load_dataset_btn.setText("加载中...")
-            QApplication.processEvents()
+        # 加载 classes.txt
+        cp = self.dataset_path / "classes.txt"
+        if cp.exists():
+            with open(cp, "r", encoding="utf-8") as f:
+                self.classes = [l.strip() for l in f if l.strip()]
+                self.class_list.clear()
+                self.class_list.addItems(self.classes)
 
-            try:
-                # 支持的图片格式
-                valid_extensions = {".jpg", ".jpeg", ".png", ".bmp"}
-                self.image_files = []
-
-                # 扫描目录中的图片文件
-                for item in self.dataset_path.iterdir():
-                    if item.is_file():
-                        # 统一转换为小写比较，避免重复
-                        ext = item.suffix.lower()
-                        if ext in valid_extensions:
-                            self.image_files.append(item)
-
-                # 按文件名排序
-                self.image_files.sort(key=lambda x: x.name.lower())
-                self.current_index = 0
-
-                log.debug(f"扫描完成，找到 {len(self.image_files)} 个图片文件:")
-
-            except Exception as e:
-                log.error(f"扫描图片时出错: {e}")
-                self.image_files = []
-
-            finally:
-                self.load_dataset_btn.setEnabled(True)
-                self.load_dataset_btn.setText("加载图片文件夹")
-
-            if self.image_files:
-                self._load_current_image()
-                InfoBar.success(title="加载成功", content=f"找到 {len(self.image_files)} 张图片", parent=self)
-            else:
-                InfoBar.warning(title="警告", content="未找到支持的图片文件 (.jpg, .jpeg, .png, .bmp)", parent=self)
+        self.image_files = sorted(
+            [p for p in self.dataset_path.iterdir() if p.suffix.lower() in {".jpg", ".jpeg", ".png", ".bmp"}]
+        )
+        if self.image_files:
+            self.current_index = 0
+            self._load_current_image()
+            InfoBar.success("成功", f"加载 {len(self.image_files)} 张图片", parent=self)
 
     def _load_current_image(self):
-        """加载当前图片"""
-        if not self.image_files or self.current_index < 0 or self.current_index >= len(self.image_files):
+        if not self.image_files:
             return
-
-        # 更新界面状态
+        path = self.image_files[self.current_index]
+        self.current_image_path = path
+        self.image_label.setText(path.name)
+        self.progress_label.setText(f"{self.current_index+1}/{len(self.image_files)}")
         self.prev_btn.setEnabled(self.current_index > 0)
         self.next_btn.setEnabled(self.current_index < len(self.image_files) - 1)
 
-        image_path = self.image_files[self.current_index]
-        self.current_image_path = image_path
-
-        # 立即更新界面信息
-        self.image_info_label.setText(f"当前: {image_path.name}")
-        self.progress_label.setText(f"{self.current_index + 1}/{len(self.image_files)}")
-
-        # 强制界面更新
-        QApplication.processEvents()
-
-        # 加载图片
-        if self.canvas.load_image(image_path):
-            # 等待图片完全加载后再加载标注
-            QApplication.processEvents()
-            self._load_existing_annotations()
-        else:
-            InfoBar.error(title="错误", content=f"无法加载图片: {image_path.name}", parent=self)
-
-    def _on_image_loaded(self):
-        """图片加载完成后的回调"""
-        # 可以在这里添加图片加载完成后的额外处理
-        pass
-
-    def _load_existing_annotations(self, annotations: list[str] = None):
-        """加载已有的标注文件"""
-        if not self.current_image_path:
-            return
-
-        # 清空当前标注
-        self.canvas.clear_annotations()
+        self.canvas.load_image(path)
         self.annotation_list.clear()
+        self._load_existing_annotations()
 
-        # 等待画布完全准备好
-        if not self.canvas.original_pixmap:
-            return
+    def _load_existing_annotations(self):
+        txt = self.current_image_path.with_suffix(".txt")
+        if txt.exists():
+            with open(txt, "r", encoding="utf-8") as f:
+                for line in f:
+                    parts = line.strip().split()
+                    if len(parts) == 5:
+                        cid = int(parts[0])
+                        vals = list(map(float, parts[1:]))
+                        self.canvas.annotations.append([cid] + vals)
+                        name = self.classes[cid] if cid < len(self.classes) else "unknown"
+                        self.annotation_list.addItem(f"{name} (norm)")
+            self.canvas.update()
 
-        # 查找对应的 YOLO 标注文件
-        txt_path = self.current_image_path.with_suffix(".txt")
-        if txt_path.exists():
-            try:
-                with open(txt_path, "r", encoding="utf-8") as f:
-                    lines = f.readlines()
-                    annotation_count = 0
-
-                    for line in lines:
-                        self._load_line_annotation(line)
-                        annotation_count += 1
-
-                if annotation_count > 0:
-                    # 强制更新画布显示
-                    self.canvas.update()
-                    log.info(f"已加载 {annotation_count} 个标注")
-
-            except Exception as e:
-                log.error(f"加载标注文件失败: {e}")
-
-    def _load_line_annotation(self, line: str):
-        """加载一行标注信息"""
-        parts = line.strip().split()
-        if len(parts) == 5:
-            class_id = int(parts[0])
-            x_center, y_center, width, height = map(float, parts[1:])
-
-            # 转换为像素坐标
-            img_w = self.canvas.original_pixmap.width()
-            img_h = self.canvas.original_pixmap.height()
-
-            # 确保坐标在有效范围内
-            x_center = max(0, min(x_center, 1.0))
-            y_center = max(0, min(y_center, 1.0))
-            width = max(0, min(width, 1.0))
-            height = max(0, min(height, 1.0))
-
-            x1 = int((x_center - width / 2) * img_w)
-            y1 = int((y_center - height / 2) * img_h)
-            x2 = int((x_center + width / 2) * img_w)
-            y2 = int((y_center + height / 2) * img_h)
-
-            # 确保坐标不超出图片边界
-            x1 = max(0, min(x1, img_w - 1))
-            y1 = max(0, min(y1, img_h - 1))
-            x2 = max(0, min(x2, img_w - 1))
-            y2 = max(0, min(y2, img_h - 1))
-
-            class_name = self.classes[class_id] if class_id < len(self.classes) else f"class_{class_id}"
-            bbox = [x1, y1, x2, y2, class_name]
-            self.canvas.annotations.append(bbox)
-            self.annotation_list.addItem(f"{class_name}: [{x1}, {y1}, {x2}, {y2}]")
+    def _on_bbox_drawn(self, bbox):
+        cid = bbox[0]
+        name = self.classes[cid] if cid < len(self.classes) else str(cid)
+        self.annotation_list.addItem(f"{name} (norm)")
 
     def _prev_image(self):
-        """上一张图片"""
-        if self.auto_export_check.isChecked and self.annotation_list.count() > 0:
+        if self.auto_save.isChecked():
             self._export_yolo()
         if self.current_index > 0:
             self.current_index -= 1
             self._load_current_image()
 
     def _next_image(self):
-        """下一张图片"""
-        if self.auto_export_check.isChecked and self.annotation_list.count() > 0:
+        if self.auto_save.isChecked():
             self._export_yolo()
         if self.current_index < len(self.image_files) - 1:
             self.current_index += 1
             self._load_current_image()
 
     def _clear_annotations(self):
-        """清空所有标注"""
         self.canvas.clear_annotations()
         self.annotation_list.clear()
 
-    def _datect_annotations(self):
-        """使用模型推理 检测标注框"""
-        if not hasattr(self, "onnx"):
-            self.onnx = YOLOONNXDetector(onnx_path=str(MODULES_DIR / "best.onnx"), class_names=self.classes)
-
-        img, results, times = self.onnx.detect_image(str(self.current_image_path))
-        # [{'box': [959, 539, 959, 539], 'confidence': 0.7331731915473938, 'class_id': 5, 'class_name': 'ui_task', 'center': (518728, 18449)}, {'box': [959, 539, 959, 539], 'confidence': 0.35861337184906006, 'class_id': 2, 'class_name': 'ui_lv', 'center': (247909, 322439)}]
-        log.info(results)
-
     def _undo_annotation(self):
-        """撤销上一个标注"""
-        self.canvas.remove_last_annotation()
+        self.canvas.remove_last()
         if self.annotation_list.count() > 0:
             self.annotation_list.takeItem(self.annotation_list.count() - 1)
 
+    def _detect_annotations(self):
+        if not hasattr(self, "detector"):
+            model_path = MODULES_DIR / "best.onnx"
+            if not model_path.exists():
+                InfoBar.warning("未找到模型", f"{model_path} 不存在", parent=self)
+                return
+            self.detector = YOLOONNXDetector(str(model_path), class_names=self.classes, conf_threshold=0.25)
+
+        try:
+            _, detections, _ = self.detector.detect_image(str(self.current_image_path))
+            detections = [d for d in detections if d["confidence"] > 0.3]  # 可调
+            self.canvas.add_from_model(detections, self.classes)
+            self.annotation_list.clear()
+            for d in detections:
+                self.annotation_list.addItem(f"{d['class_name']} {d['confidence']:.2f}")
+            InfoBar.success("自动标注完成", f"检测到 {len(detections)} 个目标", parent=self)
+        except Exception as e:
+            InfoBar.error("检测失败", str(e), parent=self)
+
     def _add_class(self):
-        """添加新类别"""
-        class_name = self.class_edit.text().strip()
-        if class_name and class_name not in self.classes:
-            self.classes.append(class_name)
-            self.class_list.addItem(class_name)
+        name = self.class_edit.text().strip()
+        if name and name not in self.classes:
+            self.classes.append(name)
+            self.class_list.addItem(name)
             self.class_edit.clear()
 
-            InfoBar.success(title="成功", content=f"已添加类别: {class_name}", parent=self)
-
-    def _on_class_selected(self, class_name):
-        """类别选择变化"""
-        if class_name:
-            self.canvas.set_current_class(class_name)
-
-    def _on_bbox_drawn(self, bbox, class_name):
-        """标注框绘制完成"""
-        x1, y1, x2, y2, _ = bbox
-        self.annotation_list.addItem(f"{class_name}: [{x1}, {y1}, {x2}, {y2}]")
-
     def _export_yolo(self):
-        """导出为 YOLO 格式"""
-        if not hasattr(self, "dataset_path"):
-            InfoBar.warning(title="警告", content="请先加载数据集", parent=self)
+        if not self.current_image_path:
             return
+        txt_path = self.current_image_path.with_suffix(".txt")
+        with open(txt_path, "w", encoding="utf-8") as f:
+            for ann in self.canvas.annotations:
+                f.write(f"{ann[0]} {ann[1]:.6f} {ann[2]:.6f} {ann[3]:.6f} {ann[4]:.6f}\n")
 
-        # 为数据集中的张图片生成标注
-        total_annotations = 0
-        for i, image_path in enumerate(self.image_files):
-            if i == self.current_index:
-                txt_path = image_path.with_suffix(".txt")
-                try:
-                    with open(txt_path, "w", encoding="utf-8") as f:
-                        for bbox in self.canvas.annotations:
-                            x1, y1, x2, y2, class_name = bbox
-
-                            # 获取类别 ID
-                            if class_name in self.classes:
-                                class_id = self.classes.index(class_name)
-                            else:
-                                # 如果类别不存在，添加到列表
-                                self.classes.append(class_name)
-                                class_id = len(self.classes) - 1
-                                self.class_list.addItem(class_name)
-
-                            # 转换为 YOLO 格式 (归一化坐标)
-                            if self.canvas.original_pixmap:
-                                img_w = self.canvas.original_pixmap.width()
-                                img_h = self.canvas.original_pixmap.height()
-
-                                x_center = ((x1 + x2) / 2) / img_w
-                                y_center = ((y1 + y2) / 2) / img_h
-                                width = (x2 - x1) / img_w
-                                height = (y2 - y1) / img_h
-
-                                f.write(f"{class_id} {x_center:.6f} {y_center:.6f} {width:.6f} {height:.6f}\n")
-                                total_annotations += 1
-
-                except Exception as e:
-                    log.error(f"导出标注失败 {image_path}: {e}")
-
-        # 保存类别文件
-        classes_path = self.dataset_path / "classes.txt"
-        try:
-            with open(classes_path, "w", encoding="utf-8") as f:
-                for class_name in self.classes:
-                    f.write(f"{class_name}\n")
-        except Exception as e:
-            log.error(f"保存类别文件失败: {e}")
-
-        InfoBar.success(title="导出成功", content=f"已导出 {total_annotations} 个标注到 YOLO 格式", parent=self)
+        # 保存 classes.txt
+        with open(self.dataset_path / "classes.txt", "w", encoding="utf-8") as f:
+            for c in self.classes:
+                f.write(c + "\n")
 
     def _organize_dataset(self):
         """整理数据集"""
