@@ -1,14 +1,4 @@
-# -*- coding: utf-8 -*-
-"""
-图片标注工具 - 完全重构版（2025.11.19）
-核心特性：
-1. 标注框永不偏移（归一化坐标存储）
-2. 支持任意分辨率（960×540 ~ 8K 都完美）
-3. 鼠标在图片上自动显示精准十字光标
-4. 丰富快捷键（←→ Delete Ctrl+S Ctrl+Z 等）
-5. 模型自动检测一键标注（可微调）
-6. 加载/保存 100% 无像素误差
-"""
+"""图片标注工具"""
 
 import datetime
 import os
@@ -16,7 +6,7 @@ import shutil
 from pathlib import Path
 
 from PyQt5.QtCore import Qt, QPointF, QRectF, pyqtSignal
-from PyQt5.QtGui import QPixmap, QPainter, QPen, QColor, QCursor
+from PyQt5.QtGui import QPixmap, QPainter, QPen, QColor, QCursor, QWheelEvent
 from PyQt5.QtWidgets import (
     QWidget,
     QHBoxLayout,
@@ -55,7 +45,7 @@ log = get_logger()
 
 
 class AnnotationCanvas(QLabel):
-    """核心画布 - 使用归一化坐标，彻底解决偏移问题"""
+    """核心画布 - 使用归一化坐标"""
 
     bboxDrawn = pyqtSignal(list)  # [class_id, cx_norm, cy_norm, w_norm, h_norm]
     # 已标注框
@@ -80,12 +70,29 @@ class AnnotationCanvas(QLabel):
         self.annotations = []  # 归一化标注 [class_id, cx, cy, w, h]
         self.current_class_id = 0
 
+        # 默认模式为平移，Q键切换为标注模式
+        self.is_drawing_mode = False  # False=平移模式, True=标注模式
         self.is_drawing = False
         self.start_pos = QPointF()
         self.current_pos = QPointF()
 
+        # 存储当前鼠标位置用于绘制十字准星
+        self.current_mouse_pos = QPointF()
+
+        # 缩放相关变量
+        self.zoom_factor = 1.0
+        self.min_zoom = 0.1
+        self.max_zoom = 5.0
+        self.zoom_step = 0.1
+        self.pan_start_pos = QPointF()
+        self.is_panning = False
+        self.pan_offset = QPointF(0, 0)
+
         self.bbox_pen = QPen(QColor(0, 255, 0), 2)
         self.drawing_pen = QPen(QColor(255, 80, 80), 2, Qt.DashLine)
+
+        # 十字准星画笔
+        self.crosshair_pen = QPen(QColor(255, 255, 255, 180), 1, Qt.DashLine)
 
     def _get_image_rect(self):
         """计算图片在画布中的显示区域和缩放比例"""
@@ -97,10 +104,15 @@ class AnnotationCanvas(QLabel):
         if pw == 0 or ph == 0:
             return QRectF(), 0.0
 
-        scale = min(canvas.width() / pw, canvas.height() / ph)
+        # 基础缩放比例（适应画布）
+        base_scale = min(canvas.width() / pw, canvas.height() / ph)
+        # 应用用户缩放
+        scale = base_scale * self.zoom_factor
         sw, sh = pw * scale, ph * scale
-        offset_x = (canvas.width() - sw) / 2
-        offset_y = (canvas.height() - sh) / 2
+
+        # 应用平移偏移
+        offset_x = (canvas.width() - sw) / 2 + self.pan_offset.x()
+        offset_y = (canvas.height() - sh) / 2 + self.pan_offset.y()
 
         return QRectF(offset_x, offset_y, sw, sh), scale
 
@@ -123,6 +135,9 @@ class AnnotationCanvas(QLabel):
     def load_image(self, image_path):
         self.original_pixmap = QPixmap(str(image_path))
         self.annotations.clear()
+        # 重置缩放和平移
+        self.zoom_factor = 1.0
+        self.pan_offset = QPointF(0, 0)
         if self.original_pixmap.isNull():
             return False
         self.update()
@@ -131,37 +146,154 @@ class AnnotationCanvas(QLabel):
     # ----------------- 鼠标事件 -----------------
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
-            norm = self._display_to_norm(event.pos())
-            if norm:
-                self.is_drawing = True
-                self.start_pos = self.current_pos = norm
+            if self.is_drawing_mode:
+                # 标注模式：开始绘制边界框
+                norm = self._display_to_norm(event.pos())
+                if norm:
+                    self.is_drawing = True
+                    self.start_pos = self.current_pos = norm
+            else:
+                # 平移模式：开始平移
+                self.is_panning = True
+                self.pan_start_pos = event.pos()
+                self.setCursor(Qt.ClosedHandCursor)
+        elif event.button() == Qt.MiddleButton:  # 中键重置视图
+            self.zoom_factor = 1.0
+            self.pan_offset = QPointF(0, 0)
+            self.update()
 
     def mouseMoveEvent(self, event):
         rect, _ = self._get_image_rect()
-        self.setCursor(Qt.CrossCursor if rect.contains(event.pos()) else Qt.ArrowCursor)
 
-        if self.is_drawing:
+        # 更新鼠标位置用于绘制十字准星
+        self.current_mouse_pos = event.pos()
+
+        if self.is_panning:
+            # 平移操作
+            delta = event.pos() - self.pan_start_pos
+            self.pan_start_pos = event.pos()
+            self.pan_offset += delta
+            self.update()
+        elif self.is_drawing:
             norm = self._display_to_norm(event.pos())
             if norm:
                 self.current_pos = norm
                 self.update()
+        else:
+            # 设置光标样式
+            if rect.contains(event.pos()):
+                if self.is_drawing_mode:
+                    # 标注模式下隐藏系统光标，我们自己绘制十字准星
+                    self.setCursor(Qt.BlankCursor)
+                else:
+                    self.setCursor(Qt.OpenHandCursor)
+            else:
+                self.setCursor(Qt.ArrowCursor)
+
+        # 在标注模式下，只要有鼠标移动就重绘以更新十字准星
+        if self.is_drawing_mode:
+            self.update()
 
     def mouseReleaseEvent(self, event):
-        if not self.is_drawing or event.button() != Qt.LeftButton:
+        if event.button() == Qt.LeftButton and self.is_panning:
+            self.is_panning = False
+            # 释放后根据模式设置光标
+            rect, _ = self._get_image_rect()
+            if rect.contains(event.pos()):
+                if self.is_drawing_mode:
+                    self.setCursor(Qt.BlankCursor)
+                else:
+                    self.setCursor(Qt.OpenHandCursor)
+            else:
+                self.setCursor(Qt.ArrowCursor)
+        elif event.button() == Qt.LeftButton and self.is_drawing:
+            # 标注完成
+            end = self._display_to_norm(event.pos())
+            if end and (abs(self.start_pos.x() - end.x()) > 0.003 or abs(self.start_pos.y() - end.y()) > 0.003):
+                cx = (self.start_pos.x() + end.x()) / 2
+                cy = (self.start_pos.y() + end.y()) / 2
+                w = abs(self.start_pos.x() - end.x())
+                h = abs(self.start_pos.y() - end.y())
+                bbox = [self.current_class_id, cx, cy, w, h]
+                self.annotations.append(bbox)
+                self.bboxDrawn.emit(bbox)
+
+            # 标注完成后自动切换回平移模式
+            self.is_drawing_mode = False
+            self.is_drawing = False
+
+            # 更新光标
+            rect, _ = self._get_image_rect()
+            if rect.contains(event.pos()):
+                self.setCursor(Qt.OpenHandCursor)
+
+            self.update()
+
+    # ----------------- 滚轮事件：缩放 -----------------
+    def wheelEvent(self, event: QWheelEvent):
+        if not self.original_pixmap:
             return
 
-        end = self._display_to_norm(event.pos())
-        if end and (abs(self.start_pos.x() - end.x()) > 0.003 or abs(self.start_pos.y() - end.y()) > 0.003):
-            cx = (self.start_pos.x() + end.x()) / 2
-            cy = (self.start_pos.y() + end.y()) / 2
-            w = abs(self.start_pos.x() - end.x())
-            h = abs(self.start_pos.y() - end.y())
-            bbox = [self.current_class_id, cx, cy, w, h]
-            self.annotations.append(bbox)
-            self.bboxDrawn.emit(bbox)
+        # 1. 获取当前鼠标位置（兼容 PyQt5/6）
+        pos = event.position() if hasattr(event, "position") else event.pos()
+        mouse_x = pos.x()
+        mouse_y = pos.y()
 
-        self.is_drawing = False
+        # 2. 当前图片显示矩形
+        old_rect, _ = self._get_image_rect()
+        if old_rect.isEmpty():
+            return
+
+        # 3. 计算鼠标在图片上的相对位置 [0, 1]，并限制在边界内防止跳变
+        rel_x = (mouse_x - old_rect.left()) / old_rect.width()
+        rel_y = (mouse_y - old_rect.top()) / old_rect.height()
+        rel_x = max(0.0, min(1.0, rel_x))
+        rel_y = max(0.0, min(1.0, rel_y))
+
+        # 4. 计算新缩放因子（推荐乘性缩放，更自然）
+        delta = event.angleDelta().y()
+        if delta == 0:
+            return
+
+        # 方法A：线性（你原来的）
+        # zoom_in = delta > 0
+        # factor = 1.0 + self.zoom_step if zoom_in else 1.0 - self.zoom_step
+
+        # 方法B：乘性缩放（强烈推荐，体验远超线性）
+        factor = 1.25 if delta > 0 else 0.8  # 每次放大25%，缩小20%
+        # factor = math.pow(1.0015, delta)   # 超平滑指数方式（可选）
+
+        new_zoom = self.zoom_factor * factor
+        new_zoom = max(self.min_zoom, min(self.max_zoom, new_zoom))
+
+        if abs(new_zoom - self.zoom_factor) < 1e-8:  # 已达边界
+            return
+
+        # 5. 正式更新缩放
+        old_zoom = self.zoom_factor
+        self.zoom_factor = new_zoom
+
+        # 6. 计算新矩形
+        new_rect, _ = self._get_image_rect()
+
+        # 7. 核心：计算为了让鼠标下的图像点不动，需要调整多少平移
+        # 公式：new_left = mouse_x - rel_x * new_width
+        desired_left = mouse_x - rel_x * new_rect.width()
+        desired_top = mouse_y - rel_y * new_rect.height()
+
+        # 当前新矩形实际左上角位置
+        actual_left = new_rect.left()
+        actual_top = new_rect.top()
+
+        # 需要额外增加的偏移量
+        delta_x = desired_left - actual_left
+        delta_y = desired_top - actual_top
+
+        self.pan_offset += QPointF(delta_x, delta_y)
+
+        # 8. 重绘
         self.update()
+        event.accept()
 
     # ----------------- 绘制 -----------------
     def paintEvent(self, event):
@@ -175,19 +307,17 @@ class AnnotationCanvas(QLabel):
         rect, _ = self._get_image_rect()
         painter.drawPixmap(int(rect.x()), int(rect.y()), int(rect.width()), int(rect.height()), self.original_pixmap)
 
+        # 绘制模式信息和缩放比例
+        mode_text = "标注模式" if self.is_drawing_mode else "平移模式"
+        painter.setPen(Qt.GlobalColor.white)
+        painter.drawText(10, 20, f"模式: {mode_text}")
+
+        if self.zoom_factor != 1.0:
+            painter.drawText(10, 40, f"缩放: {self.zoom_factor:.1f}x")
+            if self.pan_offset.x() != 0 or self.pan_offset.y() != 0:
+                painter.drawText(10, 60, "平移中...")
+
         # 已标注框
-        for ann in self.annotations:
-            cid, cx, cy, w, h = ann
-            x1, y1, x2, y2 = self._norm_rect_to_display(cx, cy, w, h)
-            painter.setPen(self.bbox_pen)
-            painter.drawRect(QRectF(x1, y1, x2 - x1, y2 - y1))
-
-            label = (
-                self.parent().classes[cid]
-                if hasattr(self.parent(), "classes") and cid < len(self.parent().classes)
-                else str(cid)
-            )
-
         for i, ann in enumerate(self.annotations):
             cid, cx, cy, w, h = ann
             x1, y1, x2, y2 = self._norm_rect_to_display(cx, cy, w, h)
@@ -207,7 +337,7 @@ class AnnotationCanvas(QLabel):
 
             # 标签文字（白色粗体）
             painter.setPen(Qt.white)
-            painter.setFont(QApplication.font())  # 可改成粗体：QFont("Microsoft YaHei", 10, QFont.Bold)
+            painter.setFont(QApplication.font())
             painter.drawText(int(x1 + 8), int(y1 - 8), label)
 
         # 正在绘制的框
@@ -218,6 +348,21 @@ class AnnotationCanvas(QLabel):
             w = abs(self.start_pos.x() - self.current_pos.x()) * rect.width()
             h = abs(self.start_pos.y() - self.current_pos.y()) * rect.height()
             painter.drawRect(QRectF(x1, y1, w, h))
+
+        # 在标注模式下绘制完整的十字准星
+        if self.is_drawing_mode and rect.contains(self.current_mouse_pos):
+            painter.setPen(self.crosshair_pen)
+            x, y = self.current_mouse_pos.x(), self.current_mouse_pos.y()
+
+            # 绘制水平线 - 从左到右贯穿整个画布
+            painter.drawLine(0, y, self.width(), y)
+
+            # 绘制垂直线 - 从上到下贯穿整个画布
+            painter.drawLine(x, 0, x, self.height())
+
+            # 在十字中心绘制一个小圆点
+            painter.setBrush(QColor(255, 255, 255, 200))
+            painter.drawEllipse(QPointF(x, y), 2, 2)
 
     # ----------------- 工具函数 -----------------
     def clear_annotations(self):
@@ -247,6 +392,27 @@ class AnnotationCanvas(QLabel):
             self.annotations.append([cid, cx, cy, bw, bh])
         self.update()
 
+    def reset_view(self):
+        """重置视图到原始大小和位置"""
+        self.zoom_factor = 1.0
+        self.pan_offset = QPointF(0, 0)
+        self.update()
+
+    def toggle_drawing_mode(self):
+        """切换标注/平移模式"""
+        self.is_drawing_mode = not self.is_drawing_mode
+
+        # 更新光标
+        rect, _ = self._get_image_rect()
+        if rect.contains(self.mapFromGlobal(QCursor.pos())):
+            if self.is_drawing_mode:
+                self.setCursor(Qt.BlankCursor)  # 隐藏系统光标，使用自定义十字准星
+            else:
+                self.setCursor(Qt.OpenHandCursor)
+
+        self.update()
+        return self.is_drawing_mode
+
 
 class AnnotationWidget(QWidget):
     def __init__(self, objectName: str, parent=None):
@@ -275,10 +441,32 @@ class AnnotationWidget(QWidget):
         self.prev_btn = PushButton("← 上一张 (A)")
         self.next_btn = PushButton("下一张 (D) →")
         self.detect_btn = PushButton("自动检测 (Space)")
-        self.undo_btn = PushButton("撤销 (Del/Backspace/Q)")
+
+        # 修改：撤销按钮改为E键，清空按钮保持不变
+        self.undo_btn = PushButton("撤销 (E)")
         self.clear_btn = PushButton("清空 (Ctrl+Q)")
 
-        for btn in [self.prev_btn, self.next_btn, self.detect_btn, self.undo_btn, self.clear_btn]:
+        # 模式切换按钮
+        self.mode_btn = PushButton("标注模式 (Q)")
+        self.mode_btn.setCheckable(True)
+        self.mode_btn.setChecked(False)
+
+        # 缩放控制按钮
+        self.zoom_out_btn = PushButton("缩小 (-)")
+        self.zoom_reset_btn = PushButton("重置视图 (R)")
+        self.zoom_in_btn = PushButton("放大 (+)")
+
+        for btn in [
+            self.prev_btn,
+            self.next_btn,
+            self.detect_btn,
+            self.undo_btn,
+            self.clear_btn,
+            self.mode_btn,
+            self.zoom_out_btn,
+            self.zoom_reset_btn,
+            self.zoom_in_btn,
+        ]:
             toolbar.addWidget(btn)
         toolbar.addStretch()
 
@@ -362,6 +550,14 @@ class AnnotationWidget(QWidget):
         self.organize_btn.clicked.connect(self._organize_dataset)
         self.add_class_btn.clicked.connect(self._add_class)
 
+        # 模式切换连接
+        self.mode_btn.clicked.connect(self._toggle_drawing_mode)
+
+        # 缩放控制连接
+        self.zoom_in_btn.clicked.connect(self._zoom_in)
+        self.zoom_out_btn.clicked.connect(self._zoom_out)
+        self.zoom_reset_btn.clicked.connect(self._zoom_reset)
+
         self.canvas.bboxDrawn.connect(self._on_bbox_drawn)
         self.class_list.currentRowChanged.connect(lambda row: setattr(self.canvas, "current_class_id", row))
 
@@ -373,7 +569,7 @@ class AnnotationWidget(QWidget):
             self._prev_image()
         elif k in (Qt.Key.Key_Right, Qt.Key.Key_D):
             self._next_image()
-        elif k in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace, Qt.Key.Key_Q):
+        elif k == Qt.Key.Key_E:  # 修改：E键撤销标注
             self._undo_annotation()
         elif k == Qt.Key.Key_Z and m == Qt.KeyboardModifier.ControlModifier:
             self._undo_annotation()
@@ -383,6 +579,27 @@ class AnnotationWidget(QWidget):
             self._export_yolo()
         elif k == Qt.Key.Key_Space:
             self._detect_annotations()
+        # Q键切换标注模式
+        elif k == Qt.Key.Key_Q:
+            self._toggle_drawing_mode()
+        # 缩放快捷键
+        elif k == Qt.Key.Key_Equal and m == Qt.KeyboardModifier.ControlModifier:  # Ctrl++
+            self._zoom_in()
+        elif k == Qt.Key.Key_Minus and m == Qt.KeyboardModifier.ControlModifier:  # Ctrl+-
+            self._zoom_out()
+        elif k == Qt.Key.Key_R:  # R键重置视图
+            self._zoom_reset()
+        elif k == Qt.Key.Key_0 and m == Qt.KeyboardModifier.ControlModifier:  # Ctrl+0
+            self._zoom_reset()
+        # W S 控制类别选择
+        elif k == Qt.Key.Key_W:
+            current_row = self.class_list.currentRow()
+            new_row = current_row - 1 if current_row > 0 else self.class_list.count() - 1
+            self.class_list.setCurrentRow(new_row)
+        elif k == Qt.Key.Key_S:
+            current_row = self.class_list.currentRow()
+            new_row = current_row + 1 if current_row < self.class_list.count() - 1 else 0
+            self.class_list.setCurrentRow(new_row)
         else:
             super().keyPressEvent(event)
 
@@ -435,13 +652,13 @@ class AnnotationWidget(QWidget):
                         vals = list(map(float, parts[1:]))
                         self.canvas.annotations.append([cid] + vals)
                         name = self.classes[cid] if cid < len(self.classes) else "unknown"
-                        self.annotation_list.addItem(f"{name} (norm)")
+                        self.annotation_list.addItem(f"{name} {vals}")
             self.canvas.update()
 
     def _on_bbox_drawn(self, bbox):
         cid = bbox[0]
         name = self.classes[cid] if cid < len(self.classes) else str(cid)
-        self.annotation_list.addItem(f"{name} (norm)")
+        self.annotation_list.addItem(f"{name} {bbox[1:]}")
 
     def _prev_image(self):
         if self.auto_save.isChecked():
@@ -505,6 +722,32 @@ class AnnotationWidget(QWidget):
             for c in self.classes:
                 f.write(c + "\n")
 
+    # ==================== 模式切换功能 ====================
+    def _toggle_drawing_mode(self):
+        """切换标注/平移模式"""
+        is_drawing_mode = self.canvas.toggle_drawing_mode()
+        self.mode_btn.setChecked(is_drawing_mode)
+
+        # 显示模式切换提示
+        mode_name = "标注模式" if is_drawing_mode else "平移模式"
+        InfoBar.info("模式切换", f"已切换到 {mode_name}", duration=1000, parent=self)
+
+    # ==================== 缩放功能 ====================
+    def _zoom_in(self):
+        """放大"""
+        self.canvas.zoom_factor = min(self.canvas.max_zoom, self.canvas.zoom_factor + self.canvas.zoom_step)
+        self.canvas.update()
+
+    def _zoom_out(self):
+        """缩小"""
+        self.canvas.zoom_factor = max(self.canvas.min_zoom, self.canvas.zoom_factor - self.canvas.zoom_step)
+        self.canvas.update()
+
+    def _zoom_reset(self):
+        """重置视图"""
+        self.canvas.reset_view()
+
+    # ==================== 原有功能保持不变 ====================
     def _organize_dataset(self):
         """整理数据集"""
         if not hasattr(self, "dataset_path"):
