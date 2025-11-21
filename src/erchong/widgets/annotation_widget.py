@@ -1,12 +1,13 @@
 """图片标注工具"""
 
 import datetime
+import math
 import os
 import shutil
 from pathlib import Path
 
 from PyQt5.QtCore import Qt, QPointF, QRectF, pyqtSignal
-from PyQt5.QtGui import QPixmap, QPainter, QPen, QColor, QCursor, QWheelEvent
+from PyQt5.QtGui import QPixmap, QPainter, QPen, QColor, QCursor, QWheelEvent, QMouseEvent
 from PyQt5.QtWidgets import (
     QWidget,
     QHBoxLayout,
@@ -67,7 +68,7 @@ class AnnotationCanvas(QLabel):
         self.setMinimumSize(600, 450)
 
         self.original_pixmap = None
-        self.annotations = []  # 归一化标注 [class_id, cx, cy, w, h]
+        self.annotations = []  # 归一化标注 [[class_id, cx, cy, w, h]]
         self.current_class_id = 0
 
         # 默认模式为平移，Q键切换为标注模式
@@ -144,8 +145,8 @@ class AnnotationCanvas(QLabel):
         return True
 
     # ----------------- 鼠标事件 -----------------
-    def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton:
+    def mousePressEvent(self, event: QMouseEvent):
+        if event.button() == Qt.MouseButton.LeftButton:
             if self.is_drawing_mode:
                 # 标注模式：开始绘制边界框
                 norm = self._display_to_norm(event.pos())
@@ -156,13 +157,13 @@ class AnnotationCanvas(QLabel):
                 # 平移模式：开始平移
                 self.is_panning = True
                 self.pan_start_pos = event.pos()
-                self.setCursor(Qt.ClosedHandCursor)
-        elif event.button() == Qt.MiddleButton:  # 中键重置视图
+                self.setCursor(Qt.CursorShape.ClosedHandCursor)
+        elif event.button() == Qt.MouseButton.MiddleButton:  # 中键重置视图
             self.zoom_factor = 1.0
             self.pan_offset = QPointF(0, 0)
             self.update()
 
-    def mouseMoveEvent(self, event):
+    def mouseMoveEvent(self, event: QMouseEvent):
         rect, _ = self._get_image_rect()
 
         # 更新鼠标位置用于绘制十字准星
@@ -184,17 +185,17 @@ class AnnotationCanvas(QLabel):
             if rect.contains(event.pos()):
                 if self.is_drawing_mode:
                     # 标注模式下隐藏系统光标，我们自己绘制十字准星
-                    self.setCursor(Qt.BlankCursor)
+                    self.setCursor(Qt.CursorShape.BlankCursor)
                 else:
-                    self.setCursor(Qt.OpenHandCursor)
+                    self.setCursor(Qt.CursorShape.OpenHandCursor)
             else:
-                self.setCursor(Qt.ArrowCursor)
+                self.setCursor(Qt.CursorShape.ArrowCursor)
 
         # 在标注模式下，只要有鼠标移动就重绘以更新十字准星
         if self.is_drawing_mode:
             self.update()
 
-    def mouseReleaseEvent(self, event):
+    def mouseReleaseEvent(self, event: QMouseEvent):
         if event.button() == Qt.LeftButton and self.is_panning:
             self.is_panning = False
             # 释放后根据模式设置光标
@@ -255,13 +256,9 @@ class AnnotationCanvas(QLabel):
         if delta == 0:
             return
 
-        # 方法A：线性（你原来的）
-        # zoom_in = delta > 0
-        # factor = 1.0 + self.zoom_step if zoom_in else 1.0 - self.zoom_step
-
-        # 方法B：乘性缩放（强烈推荐，体验远超线性）
-        factor = 1.25 if delta > 0 else 0.8  # 每次放大25%，缩小20%
-        # factor = math.pow(1.0015, delta)   # 超平滑指数方式（可选）
+        # 乘性缩放
+        # factor = 1.25 if delta > 0 else 0.8  # 每次放大25%，缩小20%
+        factor = math.pow(1.0015, delta)  # 超平滑指数方式（可选）
 
         new_zoom = self.zoom_factor * factor
         new_zoom = max(self.min_zoom, min(self.max_zoom, new_zoom))
@@ -369,14 +366,13 @@ class AnnotationCanvas(QLabel):
         self.annotations.clear()
         self.update()
 
-    def remove_last(self):
+    def pop_annotations(self):
         if self.annotations:
             self.annotations.pop()
             self.update()
 
-    def add_from_model(self, detections, class_names):
+    def set_annotations(self, detections, class_names):
         """模型检测结果直接加入（归一化）"""
-        self.annotations.clear()
         w = self.original_pixmap.width()
         h = self.original_pixmap.height()
         for det in detections:
@@ -390,6 +386,16 @@ class AnnotationCanvas(QLabel):
             bw = (box[2] - box[0]) / w
             bh = (box[3] - box[1]) / h
             self.annotations.append([cid, cx, cy, bw, bh])
+            self.bboxDrawn.emit([cid, cx, cy, bw, bh])
+        self.update()
+
+    def list_annotations(self):
+        return self.annotations.copy()
+
+    def append_annotations(self, annotations):
+        for a in annotations:
+            self.annotations.append(a)
+            self.bboxDrawn.emit(a)
         self.update()
 
     def reset_view(self):
@@ -621,6 +627,15 @@ class AnnotationWidget(QWidget):
             current_row = self.class_list.currentRow()
             new_row = current_row + 1 if current_row < self.class_list.count() - 1 else 0
             self.class_list.setCurrentRow(new_row)
+        # C 复制上一次标注框
+        elif k == Qt.Key.Key_C:
+            self.annotation_temp = self.canvas.list_annotations()
+            InfoBar.success("复制成功", f"一共复制{len(self.annotation_temp)}个标注框", parent=self)
+        # V 粘贴标注框
+        elif k == Qt.Key.Key_V:
+            if hasattr(self, "annotation_temp") and len(self.annotation_temp) > 0:
+                self.canvas.append_annotations(self.annotation_temp)
+            InfoBar.success("粘贴成功", f"一共粘贴{len(self.annotation_temp)}个标注框", parent=self)
         else:
             super().keyPressEvent(event)
 
@@ -712,7 +727,7 @@ class AnnotationWidget(QWidget):
         self.annotation_list.clear()
 
     def _undo_annotation(self):
-        self.canvas.remove_last()
+        self.canvas.pop_annotations()
         if self.annotation_list.count() > 0:
             self.annotation_list.takeItem(self.annotation_list.count() - 1)
 
@@ -722,15 +737,13 @@ class AnnotationWidget(QWidget):
             if not model_path.exists():
                 InfoBar.warning("未找到模型", f"{model_path} 不存在", parent=self)
                 return
-            self.detector = YOLOONNXDetector(str(model_path), class_names=self.classes, conf_threshold=0.25)
+            self.detector = YOLOONNXDetector(
+                str(model_path), class_names=self.classes, conf_threshold=0.9, input_size=(640, 640)
+            )
 
         try:
-            _, detections, _ = self.detector.detect_image(str(self.current_image_path))
-            detections = [d for d in detections if d["confidence"] > 0.3]  # 可调
-            self.canvas.add_from_model(detections, self.classes)
-            self.annotation_list.clear()
-            for d in detections:
-                self.annotation_list.addItem(f"{d['class_name']} {d['confidence']:.2f}")
+            _, detections, _ = self.detector.detect(str(self.current_image_path))
+            self.canvas.set_annotations(detections, self.classes)
             InfoBar.success("自动标注完成", f"检测到 {len(detections)} 个目标", parent=self)
         except Exception as e:
             InfoBar.error("检测失败", str(e), parent=self)
@@ -828,9 +841,12 @@ class AnnotationWidget(QWidget):
                 train_ratio=self.train_ratio_spin.value(),
                 cleanup_existing=self.cleanup_check.isChecked(),
                 filter_annotated=self.filter_check.isChecked(),
+                shuffle_images=self.shuffle_check.isChecked(),
             )
 
-    def organize_yolo_dataset(self, output_dir, train_ratio=0.8, cleanup_existing=True, filter_annotated=True):
+    def organize_yolo_dataset(
+        self, output_dir, train_ratio=0.8, cleanup_existing=True, filter_annotated=True, shuffle_images=True
+    ):
         """整理为 YOLO 训练集格式 - 增强版本
 
         Args:
@@ -838,6 +854,7 @@ class AnnotationWidget(QWidget):
             train_ratio: 训练集比例
             cleanup_existing: 是否清理已存在的输出目录
             filter_annotated: 是否只筛选有标注的图片
+            shuffle_images: 是否随机打乱图片顺序
         """
         if not hasattr(self, "dataset_path"):
             InfoBar.warning(title="警告", content="请先加载数据集", parent=self)
@@ -880,8 +897,15 @@ class AnnotationWidget(QWidget):
             )
             return False
 
-        # 按文件名排序确保一致性
-        annotated_images.sort(key=lambda x: x.name.lower())
+        # 随机打乱图片顺序
+        if shuffle_images:
+            import random
+
+            random.shuffle(annotated_images)
+            log.info("已随机打乱图片顺序")
+        else:
+            # 按文件名排序确保一致性
+            annotated_images.sort(key=lambda x: x.name.lower())
 
         # 分割训练集和验证集
         total_count = len(annotated_images)
@@ -1028,8 +1052,6 @@ class AnnotationWidget(QWidget):
 
     def _setup_organize_dialog(self):
         """创建数据集整理配置对话框"""
-        from PyQt5.QtWidgets import QDialog, QDialogButtonBox, QFormLayout
-
         dialog = QDialog(self)
         dialog.setWindowTitle("YOLO 数据集配置")
         dialog.setMinimumWidth(400)
@@ -1052,6 +1074,11 @@ class AnnotationWidget(QWidget):
         self.filter_check = CheckBox("只导出有标注的图片")
         self.filter_check.setChecked(True)
         layout.addRow(self.filter_check)
+
+        # 随机打乱选项
+        self.shuffle_check = CheckBox("随机打乱图片顺序")
+        self.shuffle_check.setChecked(True)
+        layout.addRow(self.shuffle_check)
 
         # 统计信息
         total_images = len(self.image_files)
